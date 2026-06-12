@@ -64,7 +64,23 @@ def test_gate_vk_q1_q2_ratio():
     """E(Q=2)/E(Q=1) in [1.55, 1.70] (published 1.623; engine 1.604)."""
 
 
-@pytest.mark.skip(reason="awaiting port: measure.tracer (knot identification)")
+def test_gate_core_tracer_closed_ring(relaxed):
+    """The tracer finds the relaxed Q=1 hopfion core {n1=0, n2=0, n3>0} as
+    exactly ONE closed loop with a sane circumference (a planar ring of
+    radius ~R has length ~2*pi*R)."""
+    import numpy as np
+
+    from jax_solitons.measure import curve_length, trace_curves
+
+    n, _ = relaxed
+    cores = trace_curves(n[0], n[1], GRID, mask=np.asarray(n[2]) > 0)
+    assert len(cores) == 1, f"expected 1 core loop, got {len(cores)}"
+    ln = curve_length(cores[0])
+    assert 6.0 < ln < 18.0, f"core circumference implausible: {ln:.2f}"
+
+
+@pytest.mark.skip(reason="determinant needs nwt-substrate knot-id integration; "
+                  "the tracer half of this gate is live above")
 def test_gate_trefoil_q7_determinant_held():
     """Smoke-sized Q_H=7 trefoil: core-curve determinant 3 held through relax."""
 
@@ -89,7 +105,32 @@ def test_gate_persistence_energy_conservation(relaxed):
     assert abs(q1 - 1.0) < 0.05, f"charge not held in dynamics: {q1}"
 
 
-@pytest.mark.skip(reason="awaiting port: runs.checkpoint (orbax)")
-def test_gate_checkpoint_restart_determinism():
-    """A run restarted from a mid-run checkpoint must reproduce the uninterrupted
+def test_gate_checkpoint_restart_determinism(relaxed, tmp_path):
+    """A run restarted from a mid-run checkpoint reproduces the uninterrupted
     trajectory bit-identically at fixed dtype and device count."""
+    import numpy as np
+
+    from jax_solitons.runs import RunConfig, load_checkpoint, save_checkpoint
+    from jax_solitons.steppers.verlet import make_verlet_step
+
+    n0, _ = relaxed
+    v0 = jnp.zeros_like(n0)
+    step = make_verlet_step(MODEL, GRID, dt=0.005)
+
+    # uninterrupted: 40 steps, checkpoint written at 20
+    cfg = RunConfig(model="faddeev", N=GRID.N, L=GRID.L, dt=0.005, steps=40)
+    n, v = n0, v0
+    for i in range(40):
+        if i == 20:
+            save_checkpoint(tmp_path / "ckpt.npz", {"n": n, "v": v}, cfg, i)
+        n, v = step(n, v)
+    ref_n, ref_v = np.asarray(n), np.asarray(v)
+
+    # restarted: load at 20, run the remaining 20
+    state, cfg2, step_no = load_checkpoint(tmp_path / "ckpt.npz")
+    assert cfg2 == cfg and step_no == 20
+    n, v = state["n"], state["v"]
+    for _ in range(20):
+        n, v = step(n, v)
+    assert np.array_equal(np.asarray(n), ref_n), "restart not bit-identical (n)"
+    assert np.array_equal(np.asarray(v), ref_v), "restart not bit-identical (v)"

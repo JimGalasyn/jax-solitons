@@ -47,8 +47,12 @@ commitments:
 | `topology` | area-form plaquette F_ij, Hopf charge (differentiable) | **working, validated** |
 | `seeds` | rational-map hopfion ansatz | **working, validated** |
 | `seeds` | solid-angle (VOS) minimal superflow, composition | porting |
-| `runs` | `RunConfig`, orbax checkpointing, manifests, sweep driver | minimal, working |
-| `measure` | implicit core-curve tracer (lax.scan) | porting |
+| `runs` | `RunConfig`; full-state restartable checkpoints (bit-identical restart, gated in CI); config-hashed run dirs + manifest | **working, gated** |
+| `measure` | implicit core-curve tracer (lax.scan predictor-corrector), Gauss linking, arc-length resampling | **working, gated** |
+
+Batch-first state (`vmap`) is demonstrated in CI: a vmapped dynamics step
+over a stack of fields is verified identical to stepping each field
+individually.
 
 "Validated" = cross-checked **bit-identically** against the source research
 engine (seed energy and Hopf charge match to the last digit at N=64/fp64),

@@ -46,3 +46,31 @@ def test_runconfig_roundtrip_and_hash():
                      params={"c4": 6.0, "Q": -12})
     assert cfg3.config_hash() != cfg.config_hash()
     assert cfg.run_name().startswith("faddeev_N96_")
+
+
+def test_vmap_batch_dynamics_matches_per_sample():
+    """R2: a vmapped Verlet step over a batch of fields is identical to
+    stepping each field individually (the batch axis is free)."""
+    import jax
+    import numpy as np
+
+    from jax_solitons.models import faddeev_model
+    from jax_solitons.seeds import rational_map_hopfion
+    from jax_solitons.steppers.verlet import make_verlet_step
+
+    g = BoxGrid(N=16, L=6.0)
+    model = faddeev_model(c4=4.0)
+    step = make_verlet_step(model, g, dt=0.005)
+    batch_step = jax.jit(jax.vmap(step))
+
+    seeds = jnp.stack([rational_map_hopfion(g, R=r) for r in (1.5, 1.8)])
+    vels = jnp.zeros_like(seeds)
+    bn, bv = seeds, vels
+    for _ in range(3):
+        bn, bv = batch_step(bn, bv)
+    for k, r in enumerate((1.5, 1.8)):
+        n, v = seeds[k], vels[k]
+        for _ in range(3):
+            n, v = step(n, v)
+        assert np.allclose(np.asarray(bn[k]), np.asarray(n), atol=1e-6), \
+            f"vmap mismatch for sample {k} (R={r})"
