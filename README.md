@@ -55,6 +55,9 @@ Batch-first state (`vmap`) is demonstrated in CI: a vmapped dynamics step
 over a stack of fields is verified identical to stepping each field
 individually.
 
+The full map of claims → tests → references (exact identities, analytic
+solutions, published values) is in [VALIDATION.md](VALIDATION.md).
+
 "Validated" = cross-checked **bit-identically** against the source research
 engine (Faddeev: seed energy and Hopf charge match to the last digit at
 N=64/fp64; GPE: split-step matches the source stepper to 9e-16 after 10

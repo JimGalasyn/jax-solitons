@@ -65,6 +65,11 @@ def test_gate_vk_q1_q2_ratio():
     ratio = E2_ / E1
     print(f"VK ratio E(2)/E(1) = {ratio:.4f}  (band [1.55, 1.70])")
     assert 1.55 < ratio < 1.70, f"VK ratio out of band: {ratio:.4f}"
+    # Theory anchor: Vakulenko-Kapitanskii E >= c Q^(3/4) makes the
+    # E(2)/E(1) of true minima >= 2^(3/4) = 1.682 in the continuum;
+    # lattice minima may dip a few % (measured 1.609 = 0.957 * 2^(3/4)).
+    assert ratio > 0.93 * 2**0.75, \
+        f"ratio {ratio:.4f} below the VK floor — sub-VK energies mean a bug"
     # Derrick depth gate: the spinor-frame relaxation reaches the virial
     # point (source-engine lattice-normal base ~0.91; measured here at 40k:
     # Q=1 E=1108.05 vir=0.929, Q=2 E=1782.69 vir=1.007, ratio 1.609). The
