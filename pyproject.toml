@@ -33,7 +33,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
   "pytest>=8",
-  # The pure-numpy oracle (nwt-substrate) is a GitHub release, not on PyPI;
+  # The pure-numpy oracle package is a GitHub release, not on PyPI;
   # CI installs it from git when the oracle-comparison tests land.
 ]
 sharding = [

@@ -1,7 +1,7 @@
 """Acceptance gates for the engine port (the regression contract).
 
-These encode the validation chain of the source research codebase
-(LIBRARY_MIGRATION amendment 4). Live gates run smoke-sized (CPU CI);
+These encode the validation chain of the source research codebase.
+Live gates run smoke-sized (CPU CI);
 the port was additionally cross-validated bit-identically against the
 source engine at N=64/x64 (seed E and Q_H matched to the last digit).
 Remaining skips flip as their modules land; a gate that lands must never
@@ -10,7 +10,7 @@ regress.
 Reference values from validated runs of the source engine:
   - unit hopfion: area-form relaxation holds Q_H ~ 0.998 at the E ~ 1152 min
   - VK ratio: E(Q=2)/E(Q=1) = 1.604 (published 1.623), exponent ~ Q^{3/4}
-  - trefoil Q=7 smoke: carrier determinant 3 held through relaxation
+  - trefoil Q=7 smoke: core-curve knot determinant 3 held through relaxation
   - persistence: real-time leapfrog conserves dH to ~0.00% with det held
 """
 
@@ -79,8 +79,8 @@ def test_gate_core_tracer_closed_ring(relaxed):
     assert 6.0 < ln < 18.0, f"core circumference implausible: {ln:.2f}"
 
 
-@pytest.mark.skip(reason="determinant needs nwt-substrate knot-id integration; "
-                  "the tracer half of this gate is live above")
+@pytest.mark.skip(reason="determinant needs the knot-identification "
+                  "(Alexander) integration; the tracer half is live above")
 def test_gate_trefoil_q7_determinant_held():
     """Smoke-sized Q_H=7 trefoil: core-curve determinant 3 held through relax."""
 

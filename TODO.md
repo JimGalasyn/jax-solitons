@@ -19,8 +19,8 @@ state (`faddeev_cp1_model`, the source engine's frame) glides straight in:
 The spinor run hits the virial plateau (0.907) by 2k steps, then a second
 descent phase runs ~12k-22k and settles at 0.929 — the source lesson
 "15k = scouting, 40k = converged" holds in this engine too. The GPU-tier
-virial gate is now a depth gate at [0.8, 1.2]. Experiment:
-null-worldtube-private/simulations/engine_dogfood/derrick_staged.py.
+virial gate is now a depth gate at [0.8, 1.2]. (Experiment lives in the
+source research codebase.)
 
 ## Gallery (docs/gallery, GitHub Pages later)
 
@@ -62,7 +62,8 @@ rates. Order of attack:
 
 ## Other
 
-- nwt-substrate knot-id integration (flips the trefoil-determinant gate)
+- knot identification (core-curve Alexander determinant) integration
+  (flips the trefoil-determinant gate)
 - VOS minimal-superflow seeds + multi-soliton composition
 - gauged abelian-Higgs model terms + Coulomb gauge constraint
 - L-BFGS and ETDRK steppers
