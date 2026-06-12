@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jax-solitons"
+version = "0.0.1"
+description = "A general JAX engine for classical field-theory solitons: composable energy functionals, topology-preserving discretizations, GPU-farm-ready relaxation and dynamics."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+  { name = "James P. Galasyn" },
+  { name = "Claude Théodore" },
+]
+keywords = [
+  "solitons", "hopfions", "skyrmions", "faddeev-skyrme",
+  "gross-pitaevskii", "topological-charge", "jax", "gpu",
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+  "jax>=0.4.30",
+  "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8",
+  "nwt-substrate>=0.4",  # pure-numpy oracle used only in tests
+]
+sharding = [
+  "jaxdecomp>=0.3",  # distributed 3D FFT + halo exchange
+]
+checkpoint = [
+  "orbax-checkpoint",
+]
+
+[project.urls]
+Homepage = "https://github.com/JimGalasyn/jax-solitons"
+Issues = "https://github.com/JimGalasyn/jax-solitons/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jax_solitons"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
