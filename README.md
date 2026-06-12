@@ -41,9 +41,10 @@ commitments:
 | `grid` | `BoxGrid` — periodic box, explicit dtype, sharding spec | working |
 | `model` | `Model` / `EnergyTerm` / `Constraint` protocols | working |
 | `models/` | Faddeev-Skyrme (E₂ + area-form E₄, S² constraint) | **working, validated** |
-| `models/` | gauged abelian-Higgs, GPE terms | porting |
-| `steppers/` | arrested (backtracking) flow; sphere-constrained velocity-Verlet | **working, validated** |
-| `steppers/` | L-BFGS, split-step, ETDRK | porting |
+| `models/` | Gross-Pitaevskii (kinetic + g-potential, healing-length units) | **working, validated** |
+| `models/` | gauged abelian-Higgs | porting |
+| `steppers/` | arrested (backtracking) flow; projected Adam; sphere-constrained velocity-Verlet; GPE split-step (imaginary + real time) | **working, validated** |
+| `steppers/` | L-BFGS, ETDRK | porting |
 | `topology` | area-form plaquette F_ij, Hopf charge (differentiable) | **working, validated** |
 | `seeds` | rational-map hopfion ansatz | **working, validated** |
 | `seeds` | solid-angle (VOS) minimal superflow, composition | porting |
@@ -55,9 +56,14 @@ over a stack of fields is verified identical to stepping each field
 individually.
 
 "Validated" = cross-checked **bit-identically** against the source research
-engine (seed energy and Hopf charge match to the last digit at N=64/fp64),
-plus live acceptance gates in CI: area-form Q_H held through monotone
-descent, and energy conservation + charge retention in real-time dynamics.
+engine (Faddeev: seed energy and Hopf charge match to the last digit at
+N=64/fp64; GPE: split-step matches the source stepper to 9e-16 after 10
+steps), plus live acceptance gates in CI: area-form Q_H held through
+monotone descent, energy conservation + charge retention in real-time
+dynamics, core-tracer ring identification, and bit-identical
+checkpoint-restart. A GPU validation tier (`SOLITON_GPU_TIER=1 pytest
+tests/test_gpu_tier.py`) runs the physics-level Vakulenko-Kapitanskii
+spectrum gate, too slow for CPU CI.
 
 "Porting" = migrating from a validated private research codebase (relaxation
 holds Hopf charge Q=0.998 through minimization; real-time integrator conserves

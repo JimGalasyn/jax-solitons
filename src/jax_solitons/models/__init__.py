@@ -7,11 +7,15 @@ from jax_solitons.models.faddeev import (
     faddeev_model,
     n_from_Z,
 )
+from jax_solitons.models.gpe import GPEKineticTerm, GPEPotentialTerm, gpe_model
 
 __all__ = [
     "E2Term",
     "E4AreaFormTerm",
+    "GPEKineticTerm",
+    "GPEPotentialTerm",
     "S2Constraint",
     "faddeev_model",
+    "gpe_model",
     "n_from_Z",
 ]
