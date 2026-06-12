@@ -79,6 +79,21 @@ def test_cp1_frame_matches_n_frame_on_seed():
     assert np.allclose(nrm, 1.0, atol=1e-6)
 
 
+def test_faddeev_energy_density_integrates_to_energy():
+    """sum(density) * dx^3 == model.energy, by construction and forever."""
+    import numpy as np
+
+    from jax_solitons.models import faddeev_energy_density, faddeev_model
+    from jax_solitons.seeds import rational_map_hopfion
+
+    g = BoxGrid(N=24, L=8.0)
+    nf = rational_map_hopfion(g, R=2.0)
+    e = faddeev_energy_density(nf, g, c4=4.0)
+    assert e.shape == (24, 24, 24)
+    assert np.isclose(float(jnp.sum(e)) * g.dx**3,
+                      float(faddeev_model(c4=4.0).energy(nf, g)), rtol=1e-5)
+
+
 def test_vmap_batch_dynamics_matches_per_sample():
     """R2: a vmapped Verlet step over a batch of fields is identical to
     stepping each field individually (the batch axis is free)."""

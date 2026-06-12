@@ -86,6 +86,21 @@ class S2Constraint:
         return n / jnp.sqrt(jnp.sum(n * n, axis=0, keepdims=True))
 
 
+def faddeev_energy_density(n, grid: BoxGrid, c4: float = 4.0):
+    """Pointwise energy density e2 + c4*e4, shape (N, N, N); integrates to
+    the model energy (sum * dx^3). The soliton-localization field for kick
+    envelopes, emission decomposition, and daughter tracking."""
+    dx = grid.dx
+    e2 = 0.0
+    for a in range(3):
+        gx, gy, gz = _fwd_grads(n[a], dx)
+        e2 = e2 + gx**2 + gy**2 + gz**2
+    e4 = 0.0
+    for (i, j) in _PLAQUETTES:
+        e4 = e4 + (area_form_plaquette(n, i, j) / dx**2) ** 2
+    return e2 + c4 * e4
+
+
 def faddeev_model(c4: float = 4.0) -> Model:
     """The bare Faddeev-Skyrme model as a Model configuration."""
     return Model(
