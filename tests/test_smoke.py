@@ -48,6 +48,37 @@ def test_runconfig_roundtrip_and_hash():
     assert cfg.run_name().startswith("faddeev_N96_")
 
 
+def test_cp1_frame_matches_n_frame_on_seed():
+    """The CP^1 spinor frame is the same physics: energy and Hopf charge of
+    the spinor model on the spinor seed match the n-frame model on the
+    n-frame seed (both built from the same rational map)."""
+    import numpy as np
+
+    from jax_solitons.models import faddeev_cp1_model, faddeev_model
+    from jax_solitons.models.faddeev import n_from_state
+    from jax_solitons.seeds import rational_map_hopfion, rational_map_hopfion_cp1
+    from jax_solitons.topology import hopf_charge
+
+    g = BoxGrid(N=24, L=8.0)
+    nf = rational_map_hopfion(g, R=2.0)
+    z = rational_map_hopfion_cp1(g, R=2.0)
+    assert z.shape == (4, 24, 24, 24)
+    assert np.allclose(np.asarray(n_from_state(z)), np.asarray(nf), atol=1e-6)
+
+    mn = faddeev_model(c4=4.0)
+    mz = faddeev_cp1_model(c4=4.0)
+    assert np.isclose(float(mz.energy(z, g)), float(mn.energy(nf, g)),
+                      rtol=1e-6)
+    qz = float(mz.charges[0](z, g))
+    qn = float(hopf_charge(nf, g))
+    assert np.isclose(qz, qn, atol=1e-6)
+    # retraction restores |Z| = 1
+    drifted = z * 1.7
+    back = mz.constraint.retract(drifted)
+    nrm = np.asarray(jnp.sum(back**2, axis=0))
+    assert np.allclose(nrm, 1.0, atol=1e-6)
+
+
 def test_vmap_batch_dynamics_matches_per_sample():
     """R2: a vmapped Verlet step over a batch of fields is identical to
     stepping each field individually (the batch axis is free)."""

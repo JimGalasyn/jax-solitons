@@ -52,3 +52,6 @@ packages = ["src/jax_solitons"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "acceptance: regression contract gates (the validation chain of the source engine)",
+]

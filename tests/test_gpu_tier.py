@@ -19,10 +19,9 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 from jax_solitons import BoxGrid
-from jax_solitons.models import faddeev_model
-from jax_solitons.models.faddeev import E2Term, E4AreaFormTerm
-from jax_solitons.seeds import rational_map_hopfion
-from jax_solitons.steppers import arrested_flow
+from jax_solitons.models import faddeev_cp1_model, faddeev_model
+from jax_solitons.models.faddeev import E2Term, E4AreaFormTerm, n_from_state
+from jax_solitons.seeds import rational_map_hopfion_cp1
 from jax_solitons.steppers.adam import adam_flow
 from jax_solitons.topology import hopf_charge
 
@@ -34,14 +33,19 @@ pytestmark = pytest.mark.skipif(
 GRID = BoxGrid(N=96, L=18.0, dtype=jnp.float64)
 C4 = 4.0
 MODEL = faddeev_model(c4=C4)
+MODEL_CP1 = faddeev_cp1_model(c4=C4)
 
 
 def _relax(n_winding, m_winding, adam_steps=40000):
-    # 40k Adam: the source lesson is "15k = scouting, 40k = converged" --
-    # at 12k the virial ratio is still ~0.6 (soliton not yet at lambda*).
-    seed = rational_map_hopfion(GRID, R=3.5, n=n_winding, m=m_winding)
-    state, _ = arrested_flow(MODEL, seed, GRID, dt=2e-4, steps=1500)
-    state, _ = adam_flow(MODEL, state, GRID, lr=2e-3, steps=adam_steps)
+    # Deep relaxation runs in the CP^1 SPINOR frame (the source engine's
+    # frame): projected Adam on the n-field freezes the soft Derrick
+    # scaling mode (E2/E4 plateaus ~0.68 with E creeping up at any constant
+    # lr), while the spinor frame reaches the virial plateau in ~2k steps.
+    # 40k still matters: a second descent phase runs ~12k-22k (the source
+    # lesson "15k = scouting, 40k = converged" holds in this engine too).
+    z = rational_map_hopfion_cp1(GRID, R=3.5, n=n_winding, m=m_winding)
+    z, _ = adam_flow(MODEL_CP1, z, GRID, lr=2e-3, steps=adam_steps)
+    state = n_from_state(z)
     E = float(MODEL.energy(state, GRID))
     Q = float(hopf_charge(state, GRID))
     e2 = float(E2Term()(state, GRID))
@@ -51,7 +55,7 @@ def _relax(n_winding, m_winding, adam_steps=40000):
 
 def test_gate_vk_q1_q2_ratio():
     """E(Q=2)/E(Q=1) in [1.55, 1.70] (published 1.623; source engine 1.604),
-    with charges honest and virial ratios near 1."""
+    with charges honest and virial ratios at the Derrick point (gate 5)."""
     E1, Q1, vir1 = _relax(1, 1)
     print(f"\nQ=1: E={E1:.1f}  Q_H={Q1:+.4f}  E2/E4={vir1:.3f}")
     assert abs(Q1 - 1.0) < 0.05
@@ -61,9 +65,10 @@ def test_gate_vk_q1_q2_ratio():
     ratio = E2_ / E1
     print(f"VK ratio E(2)/E(1) = {ratio:.4f}  (band [1.55, 1.70])")
     assert 1.55 < ratio < 1.70, f"VK ratio out of band: {ratio:.4f}"
-    # Virial: measured 0.655/0.572 with arrested+Adam-40k (fp32 and x64
-    # IDENTICAL to 4 sig figs); pure Adam overshoots to 1.34 at higher E.
-    # Deep convergence to E2/E4 ~ 0.9 (source engine) needs a staged-lr
-    # protocol -- tracked in TODO.md. Sanity band only, not a depth gate.
-    assert 0.5 < vir1 < 1.5 and 0.5 < vir2 < 1.5, \
-        f"virial insane: {vir1:.3f}, {vir2:.3f}"
+    # Derrick depth gate: the spinor-frame relaxation reaches the virial
+    # point (source-engine lattice-normal base ~0.91; measured here at 40k:
+    # Q=1 E=1108.05 vir=0.929, Q=2 E=1782.69 vir=1.007, ratio 1.609). The
+    # n-frame plateau at 0.655/0.572 that forced the old [0.5, 1.5] sanity
+    # band was a coordinate artifact, now resolved.
+    assert 0.8 < vir1 < 1.2 and 0.8 < vir2 < 1.2, \
+        f"virial off the Derrick point: {vir1:.3f}, {vir2:.3f}"

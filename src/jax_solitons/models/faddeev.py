@@ -94,3 +94,53 @@ def faddeev_model(c4: float = 4.0) -> Model:
         constraint=S2Constraint(),
         charges=(hopf_charge,),
     )
+
+
+# --- CP^1 spinor frame ------------------------------------------------------
+#
+# State: real Z = (Re Z1, Im Z1, Re Z2, Im Z2), shape (4, N, N, N), |Z| = 1
+# pointwise. Same physics evaluated on n(Z); what changes is the OPTIMIZER
+# geometry. Projected Adam's per-coordinate steps move the soft Derrick
+# scaling mode in the spinor frame, where the n-frame stalls: at N=96, L=18,
+# c4=4 the n-frame plateaus at E2/E4 ~ 0.68 with E creeping UP at any
+# constant lr, while the source engine's spinor-frame Adam reached ~0.91.
+
+
+def n_from_state(z):
+    """Real 4-component spinor state -> unit n-field, shape (3, ...)."""
+    return n_from_Z(z[0] + 1j * z[1], z[2] + 1j * z[3])
+
+
+@dataclasses.dataclass(frozen=True)
+class CP1Term:
+    """An n-field energy term evaluated on the spinor state through n(Z)."""
+
+    term: object
+    name: str = ""
+
+    def __post_init__(self):
+        if not self.name:
+            object.__setattr__(self, "name", f"{self.term.name}_cp1")
+
+    def __call__(self, z, grid: BoxGrid):
+        return self.term(n_from_state(z), grid)
+
+
+class CP1Constraint(S2Constraint):
+    """|Z| = 1 pointwise on the real 4-component spinor (the same unit-norm
+    projection/retraction as S^2, one component higher)."""
+
+
+def hopf_charge_cp1(z, grid: BoxGrid):
+    """Hopf charge of the spinor state (through n(Z))."""
+    return hopf_charge(n_from_state(z), grid)
+
+
+def faddeev_cp1_model(c4: float = 4.0) -> Model:
+    """Faddeev-Skyrme on the CP^1 spinor state (the deep-relaxation frame)."""
+    return Model(
+        name="faddeev_cp1",
+        terms=(CP1Term(E2Term()), CP1Term(E4AreaFormTerm(c4=c4))),
+        constraint=CP1Constraint(),
+        charges=(hopf_charge_cp1,),
+    )

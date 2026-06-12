@@ -1,25 +1,26 @@
 # TODO
 
-## Deep-convergence relaxation protocol (virial E2/E4 -> ~1)
+## RESOLVED: deep convergence is a coordinate-frame problem, not a schedule
 
-At N=96, L=18, c4=4 the VK spectrum gate passes (E(Q=2)/E(Q=1) = 1.6402,
-published 1.623; source engine 1.604) with honest charges, but neither
-relaxer reaches the Derrick point:
+The old hypothesis (staged lr decay) was refuted by measurement; the fix
+was the OPTIMIZER FRAME. Projected Adam on the n-field freezes the soft
+Derrick scaling mode: at N=96, L=18, c4=4, lr=2e-3 and lr=1e-2 both crawl
++0.002 per 1k steps from an E2/E4 ~ 0.65-0.68 plateau with E creeping UP
+(noise-floor orbit, never converges). The same Adam on the CP^1 spinor
+state (`faddeev_cp1_model`, the source engine's frame) glides straight in:
 
-| pipeline | E(Q=1) | E2/E4 |
+| pipeline (Q=1) | E | E2/E4 |
 |---|---|---|
-| arrested_flow(1500) + adam_flow(40k, lr=2e-3) | 1181.4 | 0.655 |
-| adam_flow(40k, lr=2e-3) from seed | 1212.0 | 1.340 |
+| n-frame: arrested(1500) + adam(40k, lr=2e-3) | 1181.4 | 0.655 |
+| n-frame: adam(40k, lr=2e-3) from seed | 1212.0 | 1.340 |
+| n-frame: arrested(1500) + adam(12k, lr=1e-2) | 1171.9 | 0.680 |
+| **cp1-frame: adam(40k, lr=2e-3) from seed** | **1108.0** | **0.929** |
 
-The two bracket the virial point from opposite sides; the source research
-engine reached E2/E4 ~ 0.91 (its lattice-normal base at this resolution).
-Notable: **fp32 and x64 endpoints are IDENTICAL to 4 significant figures**,
-so precision is not the blocker — flow depth/schedule is.
-
-Likely fix: staged protocol (arrested scout -> Adam with lr decay ->
-optional L-BFGS polish), exposed as a stepper composition. The GPU-tier
-gate currently asserts a sanity band [0.5, 1.5] with measured values
-documented; tighten to [0.8, 1.2] when this lands.
+The spinor run hits the virial plateau (0.907) by 2k steps, then a second
+descent phase runs ~12k-22k and settles at 0.929 — the source lesson
+"15k = scouting, 40k = converged" holds in this engine too. The GPU-tier
+virial gate is now a depth gate at [0.8, 1.2]. Experiment:
+null-worldtube-private/simulations/engine_dogfood/derrick_staged.py.
 
 ## Other
 

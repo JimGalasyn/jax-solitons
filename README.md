@@ -40,7 +40,7 @@ commitments:
 |---|---|---|
 | `grid` | `BoxGrid` — periodic box, explicit dtype, sharding spec | working |
 | `model` | `Model` / `EnergyTerm` / `Constraint` protocols | working |
-| `models/` | Faddeev-Skyrme (E₂ + area-form E₄, S² constraint) | **working, validated** |
+| `models/` | Faddeev-Skyrme (E₂ + area-form E₄, S² constraint; CP¹ spinor frame for deep relaxation) | **working, validated** |
 | `models/` | Gross-Pitaevskii (kinetic + g-potential, healing-length units) | **working, validated** |
 | `models/` | gauged abelian-Higgs | porting |
 | `steppers/` | arrested (backtracking) flow; projected Adam; sphere-constrained velocity-Verlet; GPE split-step (imaginary + real time) | **working, validated** |
@@ -63,7 +63,9 @@ monotone descent, energy conservation + charge retention in real-time
 dynamics, core-tracer ring identification, and bit-identical
 checkpoint-restart. A GPU validation tier (`SOLITON_GPU_TIER=1 pytest
 tests/test_gpu_tier.py`) runs the physics-level Vakulenko-Kapitanskii
-spectrum gate, too slow for CPU CI.
+spectrum gate with a Derrick depth gate (CP¹ spinor-frame relaxation
+reaches the virial point E₂/E₄ ≈ 0.93, gated at [0.8, 1.2]), too slow for
+CPU CI.
 
 "Porting" = migrating from a validated private research codebase (relaxation
 holds Hopf charge Q=0.998 through minimization; real-time integrator conserves

@@ -62,3 +62,14 @@ def rational_map_hopfion(grid: BoxGrid, R=3.5, w=None, n=1, m=1,
     Z1, Z2 = rational_map_spinor(grid, R=R, w=w, n=n, m=m, center=center)
     nf = n_from_Z(jnp.asarray(Z1), jnp.asarray(Z2))
     return nf.astype(grid.dtype)
+
+
+def rational_map_hopfion_cp1(grid: BoxGrid, R=3.5, w=None, n=1, m=1,
+                             center=(0.0, 0.0, 0.0)) -> jnp.ndarray:
+    """Rational-map hopfion as a real CP^1 spinor state, shape (4, N, N, N)
+    = (Re Z1, Im Z1, Re Z2, Im Z2), in the grid dtype (the state layout of
+    models.faddeev.faddeev_cp1_model)."""
+    Z1, Z2 = rational_map_spinor(grid, R=R, w=w, n=n, m=m, center=center)
+    z = jnp.stack([jnp.real(jnp.asarray(Z1)), jnp.imag(jnp.asarray(Z1)),
+                   jnp.real(jnp.asarray(Z2)), jnp.imag(jnp.asarray(Z2))])
+    return z.astype(grid.dtype)
