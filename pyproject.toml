@@ -32,7 +32,8 @@ dependencies = [
 [project.optional-dependencies]
 test = [
   "pytest>=8",
-  "nwt-substrate>=0.4",  # pure-numpy oracle used only in tests
+  # The pure-numpy oracle (nwt-substrate) is a GitHub release, not on PyPI;
+  # CI installs it from git when the oracle-comparison tests land.
 ]
 sharding = [
   "jaxdecomp>=0.3",  # distributed 3D FFT + halo exchange
