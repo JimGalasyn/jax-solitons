@@ -37,6 +37,38 @@ commitments:
 Design principles (the scale-first contract every PR is reviewed
 against) are in [DESIGN.md](DESIGN.md).
 
+## Scope: what physics fits
+
+The engine covers anything expressible as **an energy functional of
+classical fields on a periodic lattice with local (or spectrally
+solvable) terms**, evolved by energy descent, Hamiltonian dynamics, or
+split-step — and run as campaigns: relaxed, evolved, topology-counted,
+10⁵ times, with receipts.
+
+**Native fits** (a `Model` configuration, no new infrastructure):
+the topological-soliton zoo — Faddeev-Skyrme hopfions, nuclear Skyrme
+(SU(2) ≅ the unit-quaternion constraint already shipped for CP¹), CP^N
+sigma models, φ⁴ kinks, Q-balls, oscillons, cosmic strings and
+monopoles with the gauge sector; the NLSE/GPE family — spinor BECs,
+dipolar GPE, stochastic GPE for finite-temperature and Kibble-Zurek
+campaigns; Ginzburg-Landau vortex matter; **micromagnetics** —
+Landau-Lifshitz-Gilbert is a damped-precession stepper on exactly the
+S² constraint here, and magnetic skyrmions/hopfions are the same
+topology this engine counts exactly.
+
+**Reasonable stretches** (one new capability each): Schrödinger-Poisson
+/ fuzzy-dark-matter halos (GPE + one spectral Poisson solve — FDM halo
+cores *are* solitons); expanding/comoving boxes (time-dependent term
+coefficients); fixed curved backgrounds (position-dependent
+coefficients, still stencil-local); analogue-gravity flows (sonic
+horizons as GPE configurations); Langevin sampling.
+
+**Out of scope by design**: particle/N-body methods, adaptive mesh
+refinement (P3 commits to uniform lattices), constrained-hyperbolic
+numerical relativity, and equilibrium Monte Carlo sampling. These are
+different paradigms with mature codes; pretending otherwise is how
+libraries become toys.
+
 ## Planned module layout
 
 | Module | Contents | Status |
