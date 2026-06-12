@@ -34,6 +34,9 @@ commitments:
    every output; full-state checkpoints (field + velocity/optimizer state +
    RNG key) via orbax; config-hashed run manifests; a thin sweep driver.
 
+Design principles (the scale-first contract every PR is reviewed
+against) are in [DESIGN.md](DESIGN.md).
+
 ## Planned module layout
 
 | Module | Contents | Status |
