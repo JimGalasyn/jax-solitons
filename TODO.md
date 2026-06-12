@@ -43,6 +43,23 @@ so the gallery doubles as living documentation):
 Render style: the source repo's hopfion/turntable renderers port over;
 keep images neutral (engine physics, no downstream interpretation).
 
+## Collider-campaign scaling (the pedal-to-the-metal tier)
+
+Collision sweeps (species x boost x impact parameter x orientation) are
+10^4-10^6 runs at N>=256 — ~$700/10^4 on marketplace 3090s at measured
+rates. Order of attack:
+1. adaptive sampling around outcome boundaries (10-100x over grids)
+2. trigger-style ID: cheap classifiers (Q ledger, blob count) on all
+   events, knot-ID only on flagged ones; cythonize/parallelize the
+   tracer (ID, not GPU, is the measured cost center)
+3. event records not raw fields (~1MB/run: config + ledgers + census +
+   core polylines; full fields only when triggered)
+4. fleet orchestration over the R4 manifest (work queue, auto-rent,
+   bad-host probe auto-cycle)
+5. asymmetric BoxGrid (Nx,Ny,Nz) for collision geometry; absorbing
+   far field to stop periodic radiation re-entry
+6. jaxDecomp sharding only when single runs outgrow one GPU (N>=512)
+
 ## Other
 
 - nwt-substrate knot-id integration (flips the trefoil-determinant gate)
