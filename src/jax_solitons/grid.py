@@ -30,9 +30,9 @@ class BoxGrid:
         return self.L / self.N
 
     def axis(self) -> jnp.ndarray:
-        """Cell-centered 1D coordinate axis, periodic over [-L/2, L/2)."""
+        """1D coordinate axis, periodic over [-L/2, L/2), x_i = -L/2 + i*dx."""
         return jnp.asarray(
-            (np.arange(self.N) + 0.5) * self.dx - self.L / 2.0, dtype=self.dtype
+            np.arange(self.N) * self.dx - self.L / 2.0, dtype=self.dtype
         )
 
     def coords(self) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -45,3 +45,9 @@ class BoxGrid:
         return jnp.asarray(
             2.0 * np.pi * np.fft.fftfreq(self.N, d=self.dx), dtype=self.dtype
         )
+
+    def k_vectors(self):
+        """(KX, KY, KZ, K2) angular wavenumber meshes, indexing='ij'."""
+        k1 = self.kaxis()
+        KX, KY, KZ = jnp.meshgrid(k1, k1, k1, indexing="ij")
+        return KX, KY, KZ, KX**2 + KY**2 + KZ**2

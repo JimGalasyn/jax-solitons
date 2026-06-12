@@ -38,14 +38,22 @@ commitments:
 
 | Module | Contents | Status |
 |---|---|---|
-| `grid` | `BoxGrid` — periodic box, explicit dtype, sharding spec | minimal, working |
-| `model` | `Model` / `EnergyTerm` / `Constraint` protocols | minimal, working |
-| `models/` | Faddeev-Skyrme (CP¹), gauged abelian-Higgs, GPE terms | porting |
-| `steppers/` | arrested Newton flow, L-BFGS, constrained velocity-Verlet, split-step, ETDRK | porting |
-| `topology` | area-form Hopf charge, plaquette F_ij, charge density | porting |
-| `seeds` | rational-map ansatz, solid-angle (VOS) minimal superflow, composition | porting |
+| `grid` | `BoxGrid` — periodic box, explicit dtype, sharding spec | working |
+| `model` | `Model` / `EnergyTerm` / `Constraint` protocols | working |
+| `models/` | Faddeev-Skyrme (E₂ + area-form E₄, S² constraint) | **working, validated** |
+| `models/` | gauged abelian-Higgs, GPE terms | porting |
+| `steppers/` | arrested (backtracking) flow; sphere-constrained velocity-Verlet | **working, validated** |
+| `steppers/` | L-BFGS, split-step, ETDRK | porting |
+| `topology` | area-form plaquette F_ij, Hopf charge (differentiable) | **working, validated** |
+| `seeds` | rational-map hopfion ansatz | **working, validated** |
+| `seeds` | solid-angle (VOS) minimal superflow, composition | porting |
 | `runs` | `RunConfig`, orbax checkpointing, manifests, sweep driver | minimal, working |
 | `measure` | implicit core-curve tracer (lax.scan) | porting |
+
+"Validated" = cross-checked **bit-identically** against the source research
+engine (seed energy and Hopf charge match to the last digit at N=64/fp64),
+plus live acceptance gates in CI: area-form Q_H held through monotone
+descent, and energy conservation + charge retention in real-time dynamics.
 
 "Porting" = migrating from a validated private research codebase (relaxation
 holds Hopf charge Q=0.998 through minimization; real-time integrator conserves
