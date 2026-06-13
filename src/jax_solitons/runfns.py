@@ -77,7 +77,9 @@ def faddeev_relax_then_id(config: RunConfig, ctx: RunContext) -> dict:
         ctx.emit(_ledger_row(model, z, grid, 0))
 
     # Segmented descent: emit + checkpoint full optimizer state between chunks.
-    step = sum(seg_lengths[:seg0])          # cumulative step at the resume point
+    # The cumulative step comes through the contract (ctx.resume_step), not
+    # smuggled in State; seg0/optimizer moments are genuine loop state.
+    step = ctx.resume_step if ctx.resume_step is not None else 0
     for seg in range(seg0, n_seg):
         z, _obs, opt = adam_flow(
             model, z, grid, lr=lr, steps=seg_lengths[seg],

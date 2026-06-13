@@ -52,13 +52,19 @@ def run_campaign(
             resume = registry.load(handle)
             ctx = RunContext(
                 resume=None if resume is None else resume[0],
+                resume_step=None if resume is None else resume[1],
                 checkpoint=lambda state, step: registry.save(handle, state, step),
                 emit=lambda record: sink.emit(handle, record),
                 trigger=lambda state, reason: sink.trigger(handle, state, reason),
             )
-            result = run_fn(config, ctx)
-            registry.finish(handle, result)
-            sink.close(handle)
+            try:
+                result = run_fn(config, ctx)
+                registry.finish(handle, result)
+            finally:
+                # Flush the run's stream even if run_fn/finish raises (e.g. a
+                # preemption modeled as an exception) -- no DONE is written on
+                # failure, so the run still resumes, but its events persist.
+                sink.close(handle)
         return task
 
     executor.run([task_for(c) for c in configs], admission)

@@ -68,16 +68,20 @@ class RunContext:
     """The four orchestration capabilities handed to the physics, and nothing
     else. This dataclass IS the seam: `RunFn` receives exactly this.
 
-      resume      prior full state to continue from, or None for a fresh run (B)
-      checkpoint  persist full integrator state at a step (B)
-      emit        stream one small event record -- a ledger row, a census (C)
-      trigger     capture full fields on a flagged event, after a quench (C/P7)
+      resume       prior full state to continue from, or None for a fresh run (B)
+      resume_step  the step that `resume` was checkpointed at, or None if fresh
+                   -- so a RunFn gets ledger/schedule continuity without having
+                   to smuggle the counter through `State` (B)
+      checkpoint   persist full integrator state at a step (B)
+      emit         stream one small event record -- a ledger row, a census (C)
+      trigger      capture full fields on a flagged event, after a quench (C/P7)
     """
 
     resume: State | None
     checkpoint: Callable[[State, int], None]
     emit: Callable[[dict], None]
     trigger: Callable[[State, str], None]
+    resume_step: int | None = None
 
 
 # The single soliton-specific injection. Returns a small result record (the
