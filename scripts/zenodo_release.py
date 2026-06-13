@@ -99,16 +99,22 @@ def main():
     ap.add_argument("tag", help="git tag, e.g. v0.0.1")
     ap.add_argument("--sandbox", action="store_true")
     ap.add_argument("--no-publish", action="store_true")
-    ap.add_argument("--new-version-of", type=int, metavar="RECORD_ID", default=None,
-                    help="create a new VERSION under an existing record's concept "
-                         "(pass the LATEST published version's record id). Required "
-                         "for every release after the first so the concept DOI is "
-                         "preserved instead of forking a new one. Look it up:\n"
-                         "  curl -s https://zenodo.org/api/records/<conceptrecid> "
-                         "| python3 -c \"import json,sys;print(json.load(sys.stdin)['id'])\"")
-    ap.add_argument("--first-release", action="store_true",
-                    help="intentionally mint a NEW concept DOI (the very first "
-                         "release only). Refused if CITATION.cff already has one.")
+    # The two release modes are mutually exclusive: extend an existing concept, or
+    # (first release) mint a new one. Neither flag => infer from CITATION.cff and
+    # refuse to silently fork a concept.
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--new-version-of", type=int, metavar="RECORD_ID", default=None,
+                      help="create a new VERSION under an existing record's concept "
+                           "(pass the LATEST published version's record id). Required "
+                           "for every release after the first so the concept DOI is "
+                           "preserved instead of forking a new one. Look it up:\n"
+                           "  curl -s https://zenodo.org/api/records/<conceptrecid> "
+                           "| python3 -c \"import json,sys;print(json.load(sys.stdin)['id'])\"")
+    mode.add_argument("--first-release", action="store_true",
+                      help="intentionally mint a NEW concept DOI; use ONLY for the "
+                           "very first release. This is the override that bypasses "
+                           "the guard which otherwise refuses to fork a concept when "
+                           "CITATION.cff already declares one.")
     args = ap.parse_args()
     tag = args.tag
     ver = tag.lstrip("v")
@@ -145,7 +151,12 @@ def main():
             sys.exit(f"fetch new-version draft failed: HTTP {st}: {json.dumps(dep)[:300]}")
         dep_id, bucket = dep["id"], dep["links"]["bucket"]
         for f in dep.get("files", []):  # drop inherited files; keep only this tarball
-            req("DELETE", f"{api}/deposit/depositions/{dep_id}/files/{f['id']}", token)
+            dst, dr = req("DELETE",
+                          f"{api}/deposit/depositions/{dep_id}/files/{f['id']}", token)
+            if dst not in (200, 204):
+                sys.exit(f"failed to delete inherited file {f.get('filename')!r}: "
+                         f"HTTP {dst}: {json.dumps(dr)[:200]} — aborting before publish "
+                         f"so we don't ship a version carrying stale files")
         print(f"new-version draft {dep_id} (under the concept of record {args.new_version_of})")
     else:
         existing = concept_doi_from_citation()
