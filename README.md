@@ -1,5 +1,9 @@
 # jax-solitons
 
+[![CI](https://github.com/JimGalasyn/jax-solitons/actions/workflows/ci.yml/badge.svg)](https://github.com/JimGalasyn/jax-solitons/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/JimGalasyn/jax-solitons)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 > **Status: pre-alpha (0.0.x).** The API is being designed in the open and
 > **will** change without notice until 0.1. Nothing here is stable yet.
 
