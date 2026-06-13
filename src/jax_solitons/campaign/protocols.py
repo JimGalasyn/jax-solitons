@@ -15,14 +15,17 @@ Contract letters map to DESIGN.md principles:
   E  Admission     probe-or-bail on flaky marketplace hosts          (P9)
 
 The ONLY soliton-specific thing crossing this boundary is `RunFn`: the physics
-is injected as a callable. Nothing under `campaign/` imports a model, stepper,
-or jax -- that discipline is what keeps the layer extractable into a standalone
-package at rule-of-three.
+is injected as a callable. No module under `campaign/` imports a model or
+stepper, and the protocol + driver surface is jax-free; the one exception is the
+reference `ProbeAdmission`, which imports jax lazily to probe the device. That
+discipline -- no physics coupling -- is what keeps the layer extractable into a
+standalone package at rule-of-three.
 """
 
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
 
@@ -54,12 +57,17 @@ class HostReport:
     Hosts, networks, and devices lie; this is the measured truth a host is
     admitted or rejected on. Fields are deliberately concrete -- the standing
     case study is a 0.996-reliability host with ZERO outbound bandwidth.
+
+    `probe_ok` is False when the probe itself failed (an exception, not a
+    measured shortfall); such a host is a hard reject regardless of thresholds
+    -- a probe that cannot run is not a host that may run work (P9).
     """
 
     has_gpu: bool
     device_name: str
     free_mem_gb: float
     outbound_mbps: float
+    probe_ok: bool = True
     notes: str = ""
 
 
@@ -173,8 +181,14 @@ class Executor(Protocol):
     preempted task is simply re-submitted and skips its finished work.
     """
 
-    def run(self, tasks: list[Callable[[], None]], admission: Admission) -> None:
-        """Execute every task thunk across the fleet, guarding each worker."""
+    def run(self, tasks: Iterable[Callable[[], None]],
+            admission: Admission) -> None:
+        """Execute every task thunk across the fleet, guarding each worker.
+
+        `tasks` is an Iterable, not a list: the driver passes a generator so
+        neither the configs nor the thunks are materialized on the submitting
+        node -- a 10^4-10^6-run queue streams rather than spiking memory.
+        """
         ...
 
 

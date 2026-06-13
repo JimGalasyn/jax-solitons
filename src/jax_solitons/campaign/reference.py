@@ -115,16 +115,21 @@ class ProbeAdmission:
         self.require_gpu = require_gpu   # fleet default True; False to run on a laptop
 
     def probe(self) -> HostReport:
-        has_gpu, name, free_gb = self._device()
+        has_gpu, name, free_gb, probe_ok = self._device()
         return HostReport(
             has_gpu=has_gpu,
             device_name=name,
             free_mem_gb=free_gb,
             outbound_mbps=self._outbound_mbps(),
+            probe_ok=probe_ok,
         )
 
     def guard(self) -> HostReport:
         r = self.probe()
+        if not r.probe_ok:
+            # A probe that couldn't run is a hard reject regardless of
+            # require_gpu -- "runs anyway" on an unprobed host is the P9 sin.
+            raise AdmissionError(f"device probe failed ({r.device_name})")
         if self.require_gpu and not r.has_gpu:
             raise AdmissionError(f"no GPU on host ({r.device_name})")
         if r.has_gpu and r.free_mem_gb < self.min_mem_gb:
@@ -138,12 +143,13 @@ class ProbeAdmission:
         return r
 
     @staticmethod
-    def _device() -> tuple[bool, str, float]:
+    def _device() -> tuple[bool, str, float, bool]:
+        """Returns (has_gpu, device_name, free_gb, probe_ok)."""
         try:
             import jax
             d = jax.devices()[0]
             if d.platform != "gpu":
-                return False, d.platform, 0.0
+                return False, d.platform, 0.0, True   # probed fine, just no GPU
             stats = getattr(d, "memory_stats", lambda: {})() or {}
             limit = stats.get("bytes_limit", 0)
             used = stats.get("bytes_in_use", 0)
@@ -151,9 +157,9 @@ class ProbeAdmission:
             # would falsely fail the mem gate on a healthy GPU. Don't block on a
             # capacity we couldn't measure.
             free_gb = (max(limit - used, 0) / 1e9) if limit else float("inf")
-            return True, str(d.device_kind), free_gb
+            return True, str(d.device_kind), free_gb, True
         except Exception as e:  # probing must never crash the worker -- it reports
-            return False, f"probe-failed: {e}", 0.0
+            return False, f"probe-failed: {e}", 0.0, False   # -> hard reject
 
     @staticmethod
     def _outbound_mbps() -> float:

@@ -222,3 +222,66 @@ def test_adam_observer_global_step():
     adam_flow(model, z1, grid, lr=2e-3, steps=4, observe_every=2, observer=obs,
               opt_state=opt, return_opt_state=True)
     assert seen == [0, 2, 4, 4, 6, 8]        # monotone & global across the resume
+
+
+def test_admission_rejects_failed_probe():
+    """E (P9): a host whose probe FAILED (probe_ok=False) is a hard reject even
+    with require_gpu=False — never 'runs anyway' on an unprobed host. Without
+    the fix, require_gpu=False would bypass the GPU/mem gates and admit it."""
+    adm = ProbeAdmission(require_gpu=False, min_mem_gb=0.0, min_mbps=0.0)
+    adm.probe = lambda: HostReport(
+        has_gpu=False, device_name="probe-failed: boom", free_mem_gb=0.0,
+        outbound_mbps=float("inf"), probe_ok=False)
+    with pytest.raises(AdmissionError):
+        adm.guard()
+
+
+def test_admission_device_probe_paths(monkeypatch):
+    """E: _device reads free memory from a GPU's memory_stats, and treats an
+    UNREADABLE capacity as UNKNOWN (+inf), not 0 — so a healthy GPU is never
+    falsely rejected. Both 'unknown' routes are covered: a present-but-empty
+    memory_stats (missing keys) and a device with no memory_stats attribute at
+    all (the getattr fallback)."""
+    import jax
+
+    class FakeDev:                       # has memory_stats(); returns given dict
+        platform = "gpu"
+        device_kind = "FakeGPU"
+        def __init__(self, stats): self._stats = stats
+        def memory_stats(self): return self._stats
+
+    class FakeDevNoStats:                 # no memory_stats attribute at all
+        platform = "gpu"
+        device_kind = "FakeGPU-nostats"
+
+    # GPU reporting stats: 10 - 2 = 8 GB free.
+    monkeypatch.setattr(jax, "devices", lambda: [FakeDev(
+        {"bytes_limit": 10_000_000_000, "bytes_in_use": 2_000_000_000})])
+    r = ProbeAdmission(min_mem_gb=4.0).probe()
+    assert r.has_gpu and r.probe_ok and abs(r.free_mem_gb - 8.0) < 0.1
+    ProbeAdmission(min_mem_gb=4.0).guard()            # admits: 8 GB >= 4
+
+    # memory_stats present but EMPTY (no bytes_limit key): UNKNOWN -> +inf.
+    monkeypatch.setattr(jax, "devices", lambda: [FakeDev({})])
+    r2 = ProbeAdmission(min_mem_gb=4.0).probe()
+    assert r2.has_gpu and r2.free_mem_gb == float("inf")
+    ProbeAdmission(min_mem_gb=4.0).guard()            # admits: unknown != blocked
+
+    # NO memory_stats attribute: getattr fallback -> {} -> UNKNOWN -> +inf.
+    monkeypatch.setattr(jax, "devices", lambda: [FakeDevNoStats()])
+    r3 = ProbeAdmission(min_mem_gb=4.0).probe()
+    assert r3.has_gpu and r3.free_mem_gb == float("inf")
+    ProbeAdmission(min_mem_gb=4.0).guard()
+
+
+def test_admission_probe_exception_is_hard_reject(monkeypatch):
+    """E (P9): if the device query itself throws, _device reports probe_ok=False
+    and guard() hard-rejects — even with require_gpu=False."""
+    import jax
+    def boom():
+        raise RuntimeError("no driver")
+    monkeypatch.setattr(jax, "devices", boom)
+    r = ProbeAdmission(require_gpu=False).probe()
+    assert r.probe_ok is False and r.device_name.startswith("probe-failed")
+    with pytest.raises(AdmissionError):
+        ProbeAdmission(require_gpu=False).guard()

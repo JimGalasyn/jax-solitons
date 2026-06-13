@@ -11,8 +11,9 @@ two triangles (Van Oosterom-Strackee per triangle):
     F_ij dx^2    = Omega(A,B,C) + Omega(A,C,D),
     A=n(x), B=n(x+e_i), C=n(x+e_i+e_j), D=n(x+e_j).
 
-This is an exact topological density (sums to 2*pi*integer over closed
-surfaces), so it carries the unwinding barrier that naive same-index
+This is an exact topological density (sums to 4*pi*integer degree over closed
+surfaces -- the full S^2 solid angle is 4*pi), so it carries the unwinding
+barrier that naive same-index
 discretizations of d_i n x d_j n lack at every resolution. The solid-angle
 form is the established best-in-class Hopf-index discretization (Phys. Rev.
 B 111, 134408 (2025) benchmarks it as the most accurate and fastest-
