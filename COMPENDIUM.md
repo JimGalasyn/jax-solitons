@@ -1,88 +1,93 @@
-# The compendium
+# The compendium — and what jax-solitons contributes to it
 
-The **compendium** is the project's notional collection of particles — destined
-to be a browsable "periodic table" on a public site, backed by a database of
-each particle's properties, both **derived** (from theory) and **computed**
-(from the solver). This note designs that database and, more importantly, the
-**firewall** that keeps it honest science rather than numerology-with-rendering.
+The **compendium is defined canonically elsewhere**: `null-worldtube/docs/`
+`compendium/` is a populated SQLite database (`nwt_particles.db`, built by
+`build_db.py`) of **27 particles** — leptons, quarks, gauge bosons, mesons,
+baryons, mixing parameters — destined for a browsable "periodic table" website.
+This note is **not** a redefinition of that schema; it describes the one layer
+`jax-solitons` adds to it, and the firewall that keeps the addition honest.
 
-Status: **vision / design only.** The computational backing is
-[PARTICLES.md](PARTICLES.md); the engine itself stays neutral (see the firewall
-below).
+Status: **design / integration note.** The compendium and its DB live in
+`null-worldtube`; the catalog mechanics are in [PARTICLES.md](PARTICLES.md).
 
-## Three layers per particle
+## What the compendium already has (and what it doesn't)
 
-Each row of the periodic table joins three sources:
+Each row carries NWT **topology** (`p`, `q`, `genus`, `carrier`, `m_radial`,
+`n_q`), a **mass** computed from that topology (`formula_text`, `computed`),
+the **PDG** value and residual, integer traceability, family, and papers. So
+the `computed` column is the **NWT analytic mass** — not a field-solver output.
+Example: the electron is `(p=2, q=1, genus=0, carrier="unknot", m_radial=3)`,
+`computed = 0.511 MeV` vs PDG to −0.0002%.
 
-| Layer | Source | Examples |
+What it does **not** have is any check that a **field-theoretic soliton with the
+claimed topology actually exists and is stable**. That is the gap `jax-solitons`
+fills.
+
+## The carrier vocabulary IS the soliton classification
+
+The compendium's `carrier` column is a knot/manifold type — and it is exactly
+what this engine measures (Hopf charge + core-curve knot ID):
+
+| `carrier` | particles | what jax-solitons computes it as |
 |---|---|---|
-| **Derived** | the theory's analytics | mass, couplings, winding numbers (p,q), Koide angle, charges |
-| **Computed** | the `jax-solitons` solver | relaxed E, E₂/E₄, topological charge, core geometry / size, stability, collision outcomes |
-| **Field data** | the relaxed configuration itself | renders the periodic-table visuals **and** seeds scene composition |
+| **hopf** | W, Z, Higgs | Faddeev **Hopf charge** Q_H (the relaxed hopfion) |
+| **unknot** | e, μ, τ | a relaxed soliton whose **core curve is an unknotted ring** |
+| **trefoil** | u, d, s, c, b, t | core curve = **trefoil** — the `measure` tracer + Alexander determinant (the trefoil-determinant gate in TODO.md) |
+| **cinquefoil** | ν₁₋₃, P_c pentaquarks | core curve = **(2,5) torus knot** |
+| S²×S² | mesons | (a different target manifold) |
 
-The **Field data** and most of **Computed** come straight from the
-`ParticleCatalog` (PARTICLES.md): each catalog entry *is* a row's computational
-half — content-addressed, provenance-stamped (relaxation `config_hash` + ledger),
-regenerable on the fleet. "Click electron → its relaxed core curve, its E₂/E₄,
-beside its derived mass" is one row.
+The topology tower is literal: `(2,1)` unknot → `(2,3)` trefoil → `(2,5)`
+cinquefoil, genus 0→1→2. **`jax-solitons` is the natural existence-and-stability
+checker for every one of these claims** — relax the field, trace the core,
+identify the knot / count the Hopf charge, compare to `carrier`.
 
-## Schema sketch
+## The integration: a solver-evidence table
+
+`jax-solitons` contributes a table linked to `particles` (by id / carrier), the
+field-theoretic half:
 
 ```
-ParticleRow:
-  id:                  str          # stable slug, e.g. "electron"
-  name, symbol:        str
-  derived:             dict         # theory predictions (mass, p, q, charges, ...)
-  computed:            dict         # solver observables (E, E2/E4, Q, core_radius, ...)
-  field_ref:           str          # ParticleCatalog content hash -> the relaxed state
-  model:               str          # WHICH solver model produced `computed` (e.g. "faddeev")
-  correspondence:      str          # "unvalidated" | "conjectured" | "validated"
-  provenance:          dict         # relaxation config_hash, ledger ref, code version
+soliton_evidence:
+  particle_id:        FK -> particles.id
+  model:              str     # e.g. "faddeev", "gauged-abelian-higgs"
+  exists:             bool    # a stable soliton was found
+  hopf_charge:        int     # measured Q_H (area form)
+  core_knot:          str     # identified core-curve knot type
+  E, E2_over_E4:      real    # relaxed energetics
+  field_ref:          str     # ParticleCatalog content hash (renders + composition)
+  correspondence:     str     # unvalidated | conjectured | validated
+  provenance:         json    # relaxation config_hash + ledger + code version
 ```
 
-Two fields carry the scientific weight: **`model`** (what was actually computed)
-and **`correspondence`** (whether that computed object is *believed/known to be*
-the theory's particle).
+A row's `correspondence` flips to `validated` only when the solver produces a
+**stable** soliton whose **measured topology matches the compendium's
+`carrier`** — not when a formula agrees.
 
-## The firewall (the load-bearing part)
+## The firewall (unchanged in spirit, sharper in form)
 
-The engine deliberately computes **neutral** soliton physics — the gallery rule
-is "engine physics, no downstream interpretation." For the **Computed** column
-to legitimately mean *"the electron's properties,"* the cached soliton must
-actually **be** the theory's electron. Concretely, in the Null Worldtube
-ontology a particle is a **(2,1) torus-knot null worldtube** (toroidal EM /
-self-sustaining oscillation), which is closer to the **gauged abelian-Higgs**
-model (still "porting" in the repo) than to the bare Faddeev-Skyrme S² hopfion
-the engine relaxes today. Therefore:
+The NWT `computed` mass (analytic, from topology) and the solver evidence
+(field-theoretic existence) are **two independent computations of the same
+claim**. The engine stays neutral ("engine physics, no downstream
+interpretation"); the *join* is where interpretation happens, and it is explicit:
+`model` + `correspondence` per row. A hopfion standing in for a boson is
+`unvalidated` until the gauge sector is right and the match is shown.
 
-- **Derived and Computed are separate columns**, never silently merged.
-- Every row names its **`model`** and a **`correspondence`** status. A `faddeev`
-  hopfion standing in for an electron is `correspondence: unvalidated` — and the
-  site must show it as such.
-- The open scientific question — **does the theory's (n,m)-winding object carry a
-  Hopf charge, and which one?** — is a real, publishable correspondence result.
-  Flipping a row to `validated` requires establishing that map, not asserting it.
+## First evidence — and a correction
 
-This separation is exactly what makes the compendium credible: the table can
-display a beautiful relaxed hopfion next to the electron's derived mass while
-being explicit that the *identification* is not yet earned.
+The deep-relaxed **Q=1 hopfion** measured on real hardware
+(E=1108.0, Q_H=0.9985, E₂/E₄=0.929) is existence evidence for the
+**`carrier = "hopf"`** family — **W, Z, Higgs — not the electron** (the electron
+is a `unknot` carrier; a hopfion is not). Its row: `model=faddeev`,
+`exists=true`, `hopf_charge=1`, `correspondence=unvalidated` (the bosons need
+the gauge sector, still "porting"). Getting *which family the evidence supports*
+right, from the first row, is the firewall working as intended.
 
 ## Build order
 
-1. **`ParticleCatalog` + `compose()`** (PARTICLES.md) — neutral, model-agnostic;
-   works today with hopfions. Enables rapid scene composition now.
-2. **The compendium schema** — the derived⊕computed⊕field join, with explicit
-   `model` + `correspondence` fields, backed by the catalog.
-3. **The right model** — gauged abelian-Higgs (or a dedicated NWT model) so the
-   Computed column is the *correct* object; then individual rows' correspondence
-   can be argued toward `validated`.
-4. **The website** — render the DB as the browsable periodic table; optionally
-   let visitors stage scenes (PARTICLES.md `compose`).
-
-## First entry, honest from row one
-
-The deep-relaxed **Q=1 hopfion** measured on real hardware
-(E = 1108.0, Q_H = 0.9985, E₂/E₄ = 0.929) is **computed-side row #1**:
-`model = faddeev`, `correspondence = unvalidated`. That honesty — a real,
-reproducible computation explicitly *not yet* claimed to be a physical
-particle — is the whole point of the firewall.
+1. **`ParticleCatalog` + `compose()`** (PARTICLES.md) — neutral, works today.
+2. **`soliton_evidence`** table + a writer that runs a relax-then-ID campaign
+   per `carrier` and records existence/knot/Hopf-charge against the DB.
+3. **Knot ID** (`measure` Alexander determinant — the trefoil gate) and the
+   **gauge sector** (gauged abelian-Higgs), so knotted and boson carriers can be
+   checked, not just the bare hopfion.
+4. The website (in `null-worldtube`) joins NWT mass + solver evidence per row.
