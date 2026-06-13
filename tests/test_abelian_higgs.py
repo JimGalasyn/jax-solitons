@@ -70,3 +70,13 @@ def test_relaxation_lowers_vortex_energy():
     E0 = float(model.energy(s, g))
     sr, _ = adam_flow(model, s, g, lr=2e-3, steps=200)
     assert float(model.energy(sr, g)) < E0
+
+
+def test_zero_coupling_rejected():
+    """e=0 has no compact-link limit (magnetic ~ 1/e^2, seed A_theta ~ n/e) —
+    reject it early with a clear error rather than producing inf/NaN energies."""
+    g = BoxGrid(N=8, L=4.0, dtype=jnp.float64)
+    with pytest.raises(ValueError, match="nonzero"):
+        abelian_higgs_model(e=0.0)
+    with pytest.raises(ValueError, match="nonzero"):
+        vortex_seed(g, n=1, e=0.0)

@@ -147,6 +147,11 @@ def abelian_higgs_model(e: float = 1.0, lam: float | None = None,
     gauge-invariant, so descent moves harmlessly along gauge orbits; Coulomb-gauge
     fixing can be added as a retraction later.
     """
+    if e == 0:
+        raise ValueError(
+            "e (gauge coupling) must be nonzero: the compact-link form has no "
+            "e->0 limit (the magnetic term scales as 1/e^2). For the ungauged "
+            "limit use the GPE / sigma-model engine instead.")
     if lam is None:
         lam = 2.0 * e**2
     return Model(
@@ -166,6 +171,8 @@ def vortex_seed(grid: BoxGrid, n: int = 1, e: float = 1.0, v: float = 1.0,
     with e*A_theta -> n/rho at large rho (so D phi -> 0 in the vacuum), regular
     at the core. Approximate -- relaxation refines it to the true profile.
     """
+    if e == 0:
+        raise ValueError("e (gauge coupling) must be nonzero (A_theta ~ n/e).")
     if xi is None:
         xi = 0.25 * grid.L / np.sqrt(2)        # ~ healing length, a few cells
     ax = np.asarray(grid.axis(), float)
