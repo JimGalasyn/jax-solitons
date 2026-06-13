@@ -65,7 +65,11 @@ rates. Order of attack:
 - knot identification (core-curve Alexander determinant) integration
   (flips the trefoil-determinant gate)
 - VOS minimal-superflow seeds + multi-soliton composition
-- gauged abelian-Higgs model terms + Coulomb gauge constraint
+- gauged abelian-Higgs: model SHIPPED (compact-link, exact gauge invariance,
+  flux charge, vortex seed — models/abelian_higgs.py). Remaining: Coulomb-gauge
+  retraction (optional); BPS line-tension validation (2πv²|n|) on a periodic
+  vortex-antivortex config; reconcile the Paper 11 (λ=2e²) / Paper 16 + oracle
+  (λ=e²/2) convention split. Unblocks the null-worldtube gauged_higgs cleanup.
 - L-BFGS and ETDRK steppers
 - jaxDecomp sharding layer (NamedSharding default + shard_map halo islands)
 - orbax checkpoint backend when sharded arrays land
