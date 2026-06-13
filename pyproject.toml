@@ -40,6 +40,8 @@ test = [
 sharding = [
   "jaxdecomp>=0.3",  # distributed 3D FFT + halo exchange
 ]
+# Note: the Vast.ai executor (campaign/vast.py) is intentionally stdlib-only
+# (urllib) — no extra needed — because the vastai SDK breaks against the live API.
 checkpoint = [
   "orbax-checkpoint",
 ]
