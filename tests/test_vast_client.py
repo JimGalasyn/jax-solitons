@@ -118,3 +118,48 @@ def test_list_instances_uses_v1(mk):
     c = mk(fake)
     fake.inst[42] = {"actual_status": "running", "dph_total": 0.2}
     assert [i.id for i in c.list_instances()] == [42]
+
+
+def test_read_key_from_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("VAST_API_KEY", raising=False)
+    kf = tmp_path / "vast_key"
+    kf.write_text("filekey\n")
+    monkeypatch.setattr(vast, "_KEY_PATHS", (str(kf),))
+    assert vast._read_key() == "filekey"
+
+
+def test_req_raises_vasterror_on_http_error(monkeypatch):
+    import io
+    import urllib.error
+
+    def boom(req, timeout=30):
+        raise urllib.error.HTTPError(req.full_url, 410, "Gone", {}, io.BytesIO(b"dead"))
+    monkeypatch.setattr(vast.urllib.request, "urlopen", boom)
+    with pytest.raises(VastError, match="410"):
+        vast._req("GET", "https://x/api/v0/instances/", "k")
+
+
+def test_logs_polls_result_url(monkeypatch):
+    monkeypatch.setenv("VAST_API_KEY", "k")
+    monkeypatch.setattr(vast, "_req",
+                        lambda *a, **k: {"result_url": "https://s3/log.txt"})
+
+    class Resp:
+        status = 200
+        def read(self): return b"onstart output\n=== DONE ==="
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(vast.urllib.request, "urlopen",
+                        lambda url, timeout=20: Resp())
+    assert "DONE" in VastClient().logs(123)
+
+
+def test_rent_failed_over_host_logs_outcome(mk, tmp_path):
+    led = VastLedger(tmp_path / "l.jsonl")
+    c = mk(FakeVast(start_status="loading", status_msg="failed to resolve x"),
+           ledger=led)
+    with pytest.raises(HostProbeFailed):
+        with c.rent(OFFER, image="img", onstart_cmd="cmd", timeout_s=5):
+            pass
+    d = next(e for e in led.events() if e["event"] == "destroyed")
+    assert d["outcome"] == "host_failed" and d["verify"] == "gone"
