@@ -237,16 +237,22 @@ def test_admission_rejects_failed_probe():
 
 
 def test_admission_device_probe_paths(monkeypatch):
-    """E: _device reads free memory from a GPU's memory_stats, and treats a
-    MISSING memory_stats as UNKNOWN (+inf), not 0 — so a healthy GPU is never
-    falsely rejected on a capacity we couldn't measure."""
+    """E: _device reads free memory from a GPU's memory_stats, and treats an
+    UNREADABLE capacity as UNKNOWN (+inf), not 0 — so a healthy GPU is never
+    falsely rejected. Both 'unknown' routes are covered: a present-but-empty
+    memory_stats (missing keys) and a device with no memory_stats attribute at
+    all (the getattr fallback)."""
     import jax
 
-    class FakeDev:
+    class FakeDev:                       # has memory_stats(); returns given dict
         platform = "gpu"
         device_kind = "FakeGPU"
         def __init__(self, stats): self._stats = stats
         def memory_stats(self): return self._stats
+
+    class FakeDevNoStats:                 # no memory_stats attribute at all
+        platform = "gpu"
+        device_kind = "FakeGPU-nostats"
 
     # GPU reporting stats: 10 - 2 = 8 GB free.
     monkeypatch.setattr(jax, "devices", lambda: [FakeDev(
@@ -255,11 +261,17 @@ def test_admission_device_probe_paths(monkeypatch):
     assert r.has_gpu and r.probe_ok and abs(r.free_mem_gb - 8.0) < 0.1
     ProbeAdmission(min_mem_gb=4.0).guard()            # admits: 8 GB >= 4
 
-    # GPU without memory_stats: UNKNOWN -> +inf, not a false mem reject.
+    # memory_stats present but EMPTY (no bytes_limit key): UNKNOWN -> +inf.
     monkeypatch.setattr(jax, "devices", lambda: [FakeDev({})])
     r2 = ProbeAdmission(min_mem_gb=4.0).probe()
     assert r2.has_gpu and r2.free_mem_gb == float("inf")
     ProbeAdmission(min_mem_gb=4.0).guard()            # admits: unknown != blocked
+
+    # NO memory_stats attribute: getattr fallback -> {} -> UNKNOWN -> +inf.
+    monkeypatch.setattr(jax, "devices", lambda: [FakeDevNoStats()])
+    r3 = ProbeAdmission(min_mem_gb=4.0).probe()
+    assert r3.has_gpu and r3.free_mem_gb == float("inf")
+    ProbeAdmission(min_mem_gb=4.0).guard()
 
 
 def test_admission_probe_exception_is_hard_reject(monkeypatch):
