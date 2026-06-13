@@ -33,9 +33,10 @@ Two verified literature sweeps drive this:
    provider — and the official `vastai` SDK — are broken against Vast's live
    API (the bare `GET /api/v0/instances/` collection returns HTTP 410 Gone;
    both route instance-listing there). Because D is *pluggable*, we dropped a
-   thin stdlib `VastClient`/`VastExecutor` (`campaign/vast.py`) straight onto
-   the contract — direct to the endpoints that work (v1 for listing, v0
-   sub-resources for create/destroy/logs), no SkyPilot, no SDK. A live run
+   thin stdlib `VastClient` (`campaign/vast.py`) — direct to the endpoints that
+   work (v1 for listing, v0 sub-resources for create/destroy/logs), no SkyPilot,
+   no SDK. (The `VastExecutor` that wires it into `run_campaign` is the next
+   step; this PR lands the client + `rent()` lifecycle.) A live run
    validated it end-to-end (search → create → run the GPU tier → destroy, with
    host fail-over and a verified-clean teardown). The lesson reinforces, not
    contradicts, "adopt, don't rebuild": we still adopt SkyPilot where its

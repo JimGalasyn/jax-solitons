@@ -12,7 +12,8 @@ Cost safety is structural: ``rent()`` ALWAYS destroys on exit (success,
 exception, or Ctrl-C) and then verifies via the independent v1 list endpoint
 that the instance is actually gone. A leaked GPU bills by the second.
 
-API key: ``$VAST_API_KEY`` or ``~/.config/vastai/vast_api_key``.
+API key: ``$VAST_API_KEY``, else ``~/.config/vastai/vast_api_key``, else
+``~/.vast_api_key`` (the first that exists; see ``_KEY_PATHS``).
 """
 
 from __future__ import annotations
@@ -268,13 +269,16 @@ class VastClient:
     @contextlib.contextmanager
     def rent(self, offer: Offer, *, image: str, onstart_cmd: str,
              disk: float = 40.0, wait: bool = True, timeout_s: float = 600):
-        """Rent an instance and GUARANTEE teardown on exit, logging the full
-        lifecycle to the ledger.
+        """Rent an instance, attempt teardown on exit, and surface any leak
+        risk LOUDLY, logging the full lifecycle to the ledger.
 
         Destroys in a finally block on any exit -- normal, exception, or
-        Ctrl-C -- then verifies via the independent v1 list that the instance
-        is gone. Teardown is not best-effort: a leaked GPU bills by the second.
-        `offer` is an Offer (not a bare id) so cost and geo land in the ledger.
+        Ctrl-C (retried) -- then independently re-checks the v1 list. If the
+        destroy failed, or the instance is still present, or teardown could not
+        be confirmed, it is recorded in the ledger and a confirmed leak / failed
+        destroy raises `VastError` rather than passing silently -- a leaked GPU
+        bills by the second. `offer` is an Offer (not a bare id) so cost and geo
+        land in the ledger.
         """
         t0 = time.monotonic()
         instance_id = self.create(offer.id, image=image, onstart_cmd=onstart_cmd,
@@ -308,15 +312,24 @@ class VastClient:
                     break
                 except Exception:
                     time.sleep(2)
-            leaked = False
-            with contextlib.suppress(Exception):
-                leaked = any(i.id == instance_id for i in self.list_instances())
+            # Independently verify teardown, distinguishing gone / present /
+            # unverifiable so a failed destroy or a failed verify can never
+            # silently pass as success.
+            try:
+                present = any(i.id == instance_id for i in self.list_instances())
+                verify = "present" if present else "gone"
+            except Exception as e:
+                verify = f"unverified: {e}"
             self._log("destroyed", offer_id=offer.id, instance_id=instance_id,
                       outcome=outcome, reason=reason[:200],
                       billed_s=round(billed_s, 1),
                       est_cost_usd=round(offer.dph * billed_s / 3600, 4),
-                      destroyed=destroyed, leaked=leaked)
-            if leaked:
+                      destroyed=destroyed, verify=verify)
+            # Raise LOUDLY on a confirmed leak or a failed destroy. (An
+            # unverifiable check after a successful destroy is logged, not
+            # raised -- destroy reported success and the receipt records it.)
+            if not destroyed or verify == "present":
                 raise VastError(
-                    f"LEAK: instance {instance_id} still present after destroy -- "
+                    f"LEAK RISK: instance {instance_id} not confirmed torn down "
+                    f"(destroyed={destroyed}, verify={verify}) -- "
                     f"run `vastai destroy instance {instance_id}`")
