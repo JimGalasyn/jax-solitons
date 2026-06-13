@@ -56,6 +56,10 @@ Issues = "https://github.com/JimGalasyn/jax-solitons/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/jax_solitons"]
 
+[tool.hatch.metadata]
+# The `oracle` extra references nwt-substrate by git URL (public, not on PyPI).
+allow-direct-references = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
