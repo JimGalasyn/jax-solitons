@@ -21,6 +21,11 @@ from jax_solitons.models.faddeev import (
     n_from_state,
     n_from_Z,
 )
+from jax_solitons.models.gauged_faddeev import (
+    gauged_faddeev_model,
+    hopf_charge_doublet,
+    n_from_doublet,
+)
 from jax_solitons.models.gpe import GPEKineticTerm, GPEPotentialTerm, gpe_model
 
 __all__ = [
@@ -40,8 +45,11 @@ __all__ = [
     "faddeev_cp1_model",
     "faddeev_energy_density",
     "faddeev_model",
+    "gauged_faddeev_model",
     "gpe_model",
     "hopf_charge_cp1",
+    "hopf_charge_doublet",
+    "n_from_doublet",
     "n_from_state",
     "n_from_Z",
 ]
