@@ -8,7 +8,8 @@ claim **live**: it builds one identical hopfion field and asserts both engines'
 energy and Hopf charge agree, so the two implementations cannot silently drift.
 
 The oracle (``nwt-substrate``) is an optional, git-installed dependency (see the
-``test`` extra in pyproject); when it is absent the whole module is skipped.
+``oracle`` extra in pyproject; CI installs ``.[test,oracle]``); when it is absent
+the whole module is skipped.
 """
 from __future__ import annotations
 
@@ -33,18 +34,20 @@ from jax_solitons.topology import hopf_charge
 N, L, C4, R = 24, 16.0, 4.0, 3.5
 
 
-def _oracle_seed_field():
-    """Build the rational-map hopfion in the oracle and return (oracle_grid, n)
-    with n the (3, N, N, N) unit field as a numpy float64 array."""
+@pytest.fixture(scope="module")
+def oracle_seed_field():
+    """Build the rational-map hopfion in the oracle ONCE and return (oracle_grid,
+    n), with n the (3, N, N, N) unit field as a numpy float64 array.  Module
+    scope so both gates share the one seed (cheap CPU-CI citizen)."""
     g = OracleGrid(N=N, L=L)
     Z1, Z2 = oracle.rational_hopfion(g, R=R, n=1, m=1)
     n1, n2, n3 = oracle.n_from_Z(Z1, Z2)
     return g, np.stack([n1, n2, n3])
 
 
-def test_faddeev_energy_matches_oracle():
+def test_faddeev_energy_matches_oracle(oracle_seed_field):
     """E2 + c4*E4 on an identical field must agree across engines."""
-    g, n = _oracle_seed_field()
+    g, n = oracle_seed_field
     e_oracle = oracle.faddeev_energy(n[0], n[1], n[2], g.dx, C4)
 
     grid = BoxGrid(N=N, L=L, dtype=jnp.float64)
@@ -53,10 +56,10 @@ def test_faddeev_energy_matches_oracle():
     assert e_engine == pytest.approx(e_oracle, rel=1e-10)
 
 
-def test_hopf_charge_matches_oracle():
+def test_hopf_charge_matches_oracle(oracle_seed_field):
     """The Whitehead Hopf charge (area form + spectral A) must agree, sign
     included -- both use the +1j (curl A = +B) textbook convention."""
-    g, n = _oracle_seed_field()
+    g, n = oracle_seed_field
     q_oracle = oracle.whitehead_hopf_charge(n[0], n[1], n[2], g)
 
     grid = BoxGrid(N=N, L=L, dtype=jnp.float64)
