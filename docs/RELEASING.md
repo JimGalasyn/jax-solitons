@@ -85,12 +85,19 @@ and `curl -s https://pypi.org/pypi/jax-solitons/json -o /dev/null -w '%{http_cod
 ### 4. Mint the Zenodo DOI
 
 ```bash
-python scripts/zenodo_release.py vX.Y.Z          # add --no-publish to review first
+# releases after the first — new VERSION under the existing concept (REQUIRED so
+# the concept DOI keeps resolving to latest; find the latest record id from the
+# concept DOI: curl -s https://zenodo.org/api/records/<conceptrecid> | ... ['id']):
+python scripts/zenodo_release.py vX.Y.Z --new-version-of <latest_record_id>
+#                                                  # add --no-publish to review first
+# the very first release only (mints the concept): ... v0.0.1 --first-release
 ```
 
-It fetches tags, `git archive`s the tag into a source tarball, creates the
-deposition, uploads, attaches metadata, and **publishes** (permanent), printing
-the **concept** and **version** DOIs. Record both. (Sanity precheck the token:
+It fetches tags, `git archive`s the tag into a source tarball, opens a new-version
+draft (or a fresh record for `--first-release`), uploads, attaches metadata, and
+**publishes** (permanent), printing the **concept** and **version** DOIs. Without
+`--new-version-of` (and with a concept already in CITATION.cff) it refuses to run,
+so a release can't silently fork a second concept DOI. Record both. (Sanity precheck the token:
 `curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat ~/.zenodo_token)" https://zenodo.org/api/deposit/depositions?size=1` → `200`.)
 
 ### 5. Backfill the DOI
