@@ -125,6 +125,19 @@ def magnetic_flux(state, grid: BoxGrid, e: float = 1.0):
     return jnp.mean(jnp.sum(phase, axis=(0, 1))) / (2.0 * jnp.pi)
 
 
+def bps_line_tension(v: float = 1.0, n: int = 1) -> float:
+    """Bogomolny line tension of a winding-`n` BPS vortex: ``2 pi v^2 |n|``.
+
+    The topological lower bound ``E >= 2 pi v^2 |n|`` (Bogomolny 1976), saturated
+    at the self-dual point. Unlike the self-dual *coupling* (which differs by
+    convention -- see the module note), this bound is convention-INDEPENDENT:
+    Paper 11, Paper 16 sec.L_2, and ``nwt_substrate.condensate.line_tension_BPS``
+    all agree on ``2 pi v^2``. The cross-engine gate locks that shared
+    normalization down (tests/test_abelian_higgs_oracle.py).
+    """
+    return 2.0 * float(np.pi) * v**2 * abs(n)
+
+
 def abelian_higgs_model(e: float = 1.0, lam: float | None = None,
                         v: float = 1.0) -> Model:
     """Gauged abelian-Higgs as a Model configuration.
