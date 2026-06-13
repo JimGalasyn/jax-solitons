@@ -23,6 +23,10 @@ permissions:
 
 jobs:
   build:
+    # Only build/publish from a TAG ref. A release event is always on a tag; a
+    # workflow_dispatch must be run with --ref vX.Y.Z. This blocks an accidental
+    # dispatch from a branch from publishing a non-tagged commit to PyPI.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -44,6 +48,7 @@ jobs:
 
   publish:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')   # defense in depth; mirrors build
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

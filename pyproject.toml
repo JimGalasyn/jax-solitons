@@ -41,10 +41,12 @@ oracle = [
   # this is a plain version specifier (PyPI forbids direct-reference git URLs in
   # published metadata). tests/test_oracle_equivalence.py self-skips when absent,
   # so it stays optional for local dev; CI installs ".[test,oracle]" to run it.
+  # PINNED EXACTLY for reproducible CI: the equivalence gate is sensitive to
+  # upstream changes, so a floor (>=) could break/drift it whenever nwt-substrate
+  # publishes. Bump this pin intentionally to re-validate against a newer oracle.
   # v0.5.0 is the first release carrying solitons.faddeev (concept DOI
-  # 10.5281/zenodo.20012027); bump this floor intentionally to re-validate the
-  # equivalence gate against a newer oracle.
-  "nwt-substrate>=0.5.0",
+  # 10.5281/zenodo.20012027).
+  "nwt-substrate==0.5.0",
 ]
 sharding = [
   "jaxdecomp>=0.3",  # distributed 3D FFT + halo exchange
