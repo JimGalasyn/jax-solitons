@@ -179,6 +179,12 @@ run dirs, streamed ledgers, triggered core-curve capture):
 JAX_ENABLE_X64=1 python examples/faddeev_campaign.py   # writes _campaign_out/
 ```
 
+## Releasing
+
+Maintainers: the runbook for cutting a tagged, Zenodo-archived release is
+[docs/RELEASING.md](docs/RELEASING.md) (version bump → PR → GitHub Release →
+`scripts/zenodo_release.py` → DOI backfill).
+
 ## License
 
 MIT.
