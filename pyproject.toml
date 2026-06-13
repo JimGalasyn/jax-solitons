@@ -41,12 +41,13 @@ oracle = [
   # tests/test_oracle_equivalence.py self-skips when absent, so it stays
   # optional for local dev; CI installs ".[test,oracle]" to run it.
   #
-  # PINNED to a commit SHA for reproducible CI: an unpinned default branch could
-  # change/break this gate from upstream. The gate still catches *this* repo's
-  # drift against the pinned oracle; bump the SHA intentionally to re-validate
-  # against a newer nwt-substrate. (No release tag yet carries solitons.faddeev,
-  # so a SHA is the stable choice; 3d79ead = nwt-substrate main, post-#8.)
-  "nwt-substrate @ git+https://github.com/JimGalasyn/nwt-substrate.git@3d79eadfa3267515a2a5b0d60ffd94f5f8519cae",
+  # PINNED to a release tag for reproducible CI: an unpinned default branch could
+  # change/break this gate from upstream. The gate catches *this* repo's drift
+  # against the pinned oracle; bump the tag intentionally to re-validate against a
+  # newer nwt-substrate. v0.5.0 is the first release carrying solitons.faddeev
+  # (concept DOI 10.5281/zenodo.20012027) — a citable, DOI-backed pin per
+  # nwt-substrate's code_division_policy, preferred over a bare SHA.
+  "nwt-substrate @ git+https://github.com/JimGalasyn/nwt-substrate.git@v0.5.0",
 ]
 sharding = [
   "jaxdecomp>=0.3",  # distributed 3D FFT + halo exchange
