@@ -67,7 +67,8 @@ def test_requires_coprime_and_nonzero_e(grid):
 
 def test_aspect_ratio_is_order_ten(grid):
     """kappa = R/a0 on the seed is a sane positive O(10) number (the Paper 16
-    sec.L_3 observable; the target pi^2 ~ 9.87 is a relaxed-equilibrium claim)."""
+    sec.L_3 observable; the relaxed-equilibrium target is the idealized pi^2 ~
+    9.870, or the alpha-pinned refined kappa = 1/sqrt(sqrt2 alpha) = 9.8437)."""
     kappa, R, a0 = aspect_ratio(flux_threaded_knot_seed(grid, 2, 3, 1), grid, 2, 3)
     assert R > 0 and a0 > 0
     assert 1.0 < kappa < 30.0

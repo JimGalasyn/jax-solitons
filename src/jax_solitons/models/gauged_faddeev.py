@@ -167,8 +167,11 @@ def hopf_charge_doublet(state, grid: BoxGrid):
 
 
 def aspect_ratio(state, grid: BoxGrid, p: int, q: int, v: float = 1.0):
-    """Estimate the knot aspect ratio kappa = R / a0 (Paper 16 sec.L_3 target
-    pi^2 ~ 9.87) from a relaxed coupled state, via Higgs-core moments.
+    """Estimate the knot aspect ratio kappa = R / a0 from a relaxed coupled
+    state, via Higgs-core moments. Targets (Paper 16 sec.L_3 / Papers 8a, 11, 17):
+    the idealized Derrick value kappa = pi^2 ~ 9.870, and the alpha-pinned
+    refined value kappa = 1/sqrt(sqrt(2) alpha) = 9.8437 (from alpha = 1/(sqrt2
+    kappa^2) at CODATA alpha; pi^2 matches it to 0.26%).
 
     The core indicator ``w = max(0, 1 - |psi|^2/v^2)`` concentrates on the Higgs
     flux tube (w -> 1 where psi -> 0, -> 0 in the bulk). Then:
