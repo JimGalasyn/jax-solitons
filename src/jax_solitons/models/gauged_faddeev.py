@@ -42,6 +42,7 @@ from __future__ import annotations
 import dataclasses
 
 import jax.numpy as jnp
+import numpy as np
 
 from jax_solitons.grid import BoxGrid
 from jax_solitons.model import Model
@@ -163,6 +164,41 @@ class HopfThetaTerm:
 def hopf_charge_doublet(state, grid: BoxGrid):
     """Hopf charge Q_H[n[psi]] of the coupled state (L_3 topological sector)."""
     return hopf_charge(n_from_doublet(state), grid)
+
+
+def aspect_ratio(state, grid: BoxGrid, p: int, q: int, v: float = 1.0):
+    """Estimate the knot aspect ratio kappa = R / a0 (Paper 16 sec.L_3 target
+    pi^2 ~ 9.87) from a relaxed coupled state, via Higgs-core moments.
+
+    The core indicator ``w = max(0, 1 - |psi|^2/v^2)`` concentrates on the Higgs
+    flux tube (w -> 1 where psi -> 0, -> 0 in the bulk). Then:
+      - major radius   R  = <rho_cyl>_w           (w-weighted cylindrical radius)
+      - core volume    V  = integral of w
+      - tube length    L  = arc length of the T(p,q) curve at radius (R, R/2)
+      - core radius    a0 = sqrt(V / (pi L))       (V ~ L * pi a0^2)
+    Returns (kappa, R, a0). A moment estimate at the paper's own altitude ("an
+    O(10) number consistent with pi^2 within ~15%"), not a precise core trace.
+    """
+    psi1, psi2, _ = unpack(state)
+    mod2 = jnp.abs(psi1) ** 2 + jnp.abs(psi2) ** 2
+    w = jnp.clip(1.0 - mod2 / v**2, 0.0, 1.0)
+    X, Y, _Z = grid.coords()
+    rho_cyl = jnp.sqrt(jnp.asarray(X) ** 2 + jnp.asarray(Y) ** 2)
+    wsum = jnp.sum(w)
+    R = float(jnp.sum(w * rho_cyl) / wsum)
+    V = float(wsum) * grid.dx**3
+    # arc length of T(p,q) at major radius R, minor R/2 (the seed's b = 0.4 R
+    # ~ R/2); length is insensitive to the exact minor radius at this altitude.
+    s = np.linspace(0.0, 2.0 * np.pi, 4000, endpoint=False)
+    b = 0.5 * R
+    cx = (R + b * np.cos(q * s)) * np.cos(p * s)
+    cy = (R + b * np.cos(q * s)) * np.sin(p * s)
+    cz = b * np.sin(q * s)
+    curve = np.stack([cx, cy, cz], axis=1)
+    L = float(np.sum(np.linalg.norm(
+        np.diff(curve, axis=0, append=curve[:1]), axis=1)))
+    a0 = float(np.sqrt(V / (np.pi * L)))
+    return R / a0, R, a0
 
 
 def gauged_faddeev_model(e: float = 1.0, lam: float | None = None, v: float = 1.0,
