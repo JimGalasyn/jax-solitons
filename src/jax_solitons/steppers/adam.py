@@ -27,11 +27,18 @@ from jax_solitons.model import Model
 
 
 def adam_flow(model: Model, state, grid: BoxGrid, *, lr=2e-3, steps=5000,
-              b1=0.9, b2=0.999, eps=1e-8, observe_every=0, observer=None):
+              b1=0.9, b2=0.999, eps=1e-8, observe_every=0, observer=None,
+              opt_state=None, return_opt_state=False):
     """Projected Adam on model.energy. Returns (state, observations).
 
     `lr` is a float or a traceable schedule step -> learning rate (step is a
     traced 1-based jnp scalar; use jnp ops, not python branches).
+
+    For checkpointable / restartable descent (campaign contract B, P4), pass
+    `opt_state=(m, v, t)` from a prior call's `return_opt_state=True` result:
+    the moment estimates and the bias-correction step counter carry over, so a
+    segmented run is bit-identical to the uninterrupted one. The schedule sees
+    the GLOBAL step `t`, not a per-segment reset.
     """
     grad = jax.grad(lambda s: model.energy(s, grid))
     constraint = model.constraint
@@ -49,13 +56,20 @@ def adam_flow(model: Model, state, grid: BoxGrid, *, lr=2e-3, steps=5000,
             new = constraint.retract(new)
         return new, m, v
 
-    m = jnp.zeros_like(state)
-    v = jnp.zeros_like(state)
+    if opt_state is None:
+        m = jnp.zeros_like(state)
+        v = jnp.zeros_like(state)
+        t0 = 0
+    else:
+        m, v, t0 = opt_state
+        m, v, t0 = jnp.asarray(m), jnp.asarray(v), int(t0)
     obs = []
     for i in range(steps):
         if observer and observe_every and (i % observe_every == 0):
             obs.append(observer(i, state))
-        state, m, v = step(state, m, v, i + 1)
+        state, m, v = step(state, m, v, t0 + i + 1)
     if observer:
         obs.append(observer(steps, state))
+    if return_opt_state:
+        return state, obs, (m, v, t0 + steps)
     return state, obs

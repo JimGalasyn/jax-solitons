@@ -105,9 +105,11 @@ class ProbeAdmission:
     the SHAPE: measure, write what was measured, refuse on failure.
     """
 
-    def __init__(self, *, min_mem_gb: float = 4.0, min_mbps: float = 1.0):
+    def __init__(self, *, min_mem_gb: float = 4.0, min_mbps: float = 1.0,
+                 require_gpu: bool = True):
         self.min_mem_gb = min_mem_gb
         self.min_mbps = min_mbps
+        self.require_gpu = require_gpu   # fleet default True; False to run on a laptop
 
     def probe(self) -> HostReport:
         has_gpu, name, free_gb = self._device()
@@ -120,9 +122,9 @@ class ProbeAdmission:
 
     def guard(self) -> HostReport:
         r = self.probe()
-        if not r.has_gpu:
+        if self.require_gpu and not r.has_gpu:
             raise AdmissionError(f"no GPU on host ({r.device_name})")
-        if r.free_mem_gb < self.min_mem_gb:
+        if r.has_gpu and r.free_mem_gb < self.min_mem_gb:
             raise AdmissionError(
                 f"insufficient device memory: {r.free_mem_gb:.1f} < "
                 f"{self.min_mem_gb} GB")
