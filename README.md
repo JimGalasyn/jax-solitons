@@ -100,7 +100,7 @@ libraries become toys.
 | `model` | `Model` / `EnergyTerm` / `Constraint` protocols | working |
 | `models/` | Faddeev-Skyrme (E₂ + area-form E₄, S² constraint; CP¹ spinor frame for deep relaxation) | **working, validated** |
 | `models/` | Gross-Pitaevskii (kinetic + g-potential, healing-length units) | **working, validated** |
-| `models/` | gauged abelian-Higgs | porting |
+| `models/` | gauged abelian-Higgs (compact-link `|Dφ|²` + plaquette `|F|²` + Higgs potential; **exact** lattice U(1) gauge invariance; magnetic-flux charge) | **working, gated** |
 | `steppers/` | arrested (backtracking) flow; projected Adam; sphere-constrained velocity-Verlet; GPE split-step (imaginary + real time) | **working, validated** |
 | `steppers/` | L-BFGS, ETDRK | porting |
 | `topology` | area-form plaquette F_ij, Hopf charge (differentiable) | **working, validated** |
