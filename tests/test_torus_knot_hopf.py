@@ -20,8 +20,15 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import pytest
 
+import numpy as np
+
 from jax_solitons.grid import BoxGrid
-from jax_solitons.seeds import torus_knot_hopfion, torus_knot_spinor
+from jax_solitons.seeds import (
+    _closed_rmf,
+    torus_knot_hopfion,
+    torus_knot_hopfion_cp1,
+    torus_knot_spinor,
+)
 from jax_solitons.topology import hopf_charge
 
 # Paper 16 anchors + a higher-m check.  (p, q, m, expected |Q_H| = p*m)
@@ -68,3 +75,48 @@ def test_torus_knot_seed_reaches_vacuum(grid):
     n = torus_knot_hopfion(grid, 2, 3, 1)
     # the box corner is the farthest point from the centered knot
     assert float(n[2, 0, 0, 0]) > 0.99
+
+
+def test_torus_knot_cp1_state_shape(grid):
+    """The CP^1 spinor state is (4, N, N, N) = (Re Z1, Im Z1, Re Z2, Im Z2)."""
+    z = torus_knot_hopfion_cp1(grid, 2, 3, 1)
+    assert z.shape == (4, grid.N, grid.N, grid.N)
+
+
+def test_torus_knot_rejects_bad_geometry(grid):
+    """Tube geometry must satisfy w < b < R (else the tube self-intersects)."""
+    with pytest.raises(ValueError, match="w < b < R"):
+        torus_knot_spinor(grid, 2, 3, 1, R=5.0, b=1.0, w=2.0)   # w > b
+
+
+def test_torus_knot_rejects_oversized_tube(grid):
+    """The whole tube (R + b + w) must fit inside the periodic box (< L/2)."""
+    with pytest.raises(ValueError, match="does not fit"):
+        torus_knot_spinor(grid, 2, 3, 1, R=8.0, b=3.0, w=2.0)   # 13 > L/2 = 10
+
+
+def test_closed_rmf_z_aligned_seed():
+    """A y-z-plane circle has t[0] = +z, exercising the z-aligned seed fallback
+    (the default [0,0,1] seed is parallel to t[0], so it must swap to [1,0,0]).
+    The returned frame must still be orthonormal and normal to the tangent."""
+    S = 200
+    th = np.linspace(0.0, 2.0 * np.pi, S, endpoint=False)
+    g = np.stack([np.zeros(S), np.cos(th), np.sin(th)], axis=1)
+    t = np.stack([np.zeros(S), -np.sin(th), np.cos(th)], axis=1)
+    r, u = _closed_rmf(g, t)
+    assert np.allclose(np.linalg.norm(r, axis=1), 1.0, atol=1e-6)
+    assert np.max(np.abs(np.einsum("ij,ij->i", r, t))) < 1e-6   # r perp t
+    assert np.max(np.abs(np.einsum("ij,ij->i", r, u))) < 1e-6   # r perp u
+
+
+def test_closed_rmf_degenerate_segment_guard():
+    """When the reflected tangent already equals the next tangent (v2 ~ 0), the
+    frame falls back to the single-reflection result instead of dividing by ~0.
+    Crafted so the tangent is perpendicular to every chord: the first Householder
+    reflection is the identity, so tL == t[i+1] exactly and c2 = 0."""
+    g = np.array([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 2.0, 0.0]])  # chord +y
+    t = np.array([[1.0, 0.0, 0.0]] * 3)                                 # tangent +x
+    r, u = _closed_rmf(g, t)
+    assert np.all(np.isfinite(r)) and np.all(np.isfinite(u))            # no NaN
+    assert np.allclose(np.linalg.norm(r, axis=1), 1.0, atol=1e-6)
+    assert np.max(np.abs(np.einsum("ij,ij->i", r, t))) < 1e-6
