@@ -10,9 +10,15 @@ designed for GPU farms.
 ## Why another soliton code?
 
 The field's first public GPU soliton codes (cuSkyrmion, soliton_solver, 2026)
-are CUDA C / Numba and single-purpose. `jax-solitons` aims to be the
-differentiable, composable, farm-scale counterpart, built on four design
-commitments:
+are CUDA C / Numba: single-GPU, forward-only (no autodiff), and either
+single-theory (cuSkyrmion: Skyrme variants) or 2D (soliton_solver: a
+composable 8-theory core, but planar). The mature neighbours are similar in
+shape — mumax3/mumax+ (CUDA micromagnetics, forward-only) and the GPE/BEC
+split-step solvers (GPUE, TorchGPE, PyGPE) are each single-physics and
+single-GPU; only PyTorch's magnum.np is genuinely differentiable, and only
+for finite-difference micromagnetics. `jax-solitons` aims to be the
+differentiable, composable, 3D, farm-scale counterpart that occupies the
+intersection none of them do, built on four design commitments:
 
 1. **One `Model` abstraction.** A model is a field with a manifold constraint,
    an energy that is a sum of composable local terms (E₂, Skyrme E₄, |B|²,
@@ -25,8 +31,13 @@ commitments:
 3. **Topology-preserving, stencil-local numerics.** The topological charge is
    discretized by the Berg-Lüscher plaquette solid-angle (area form) — which
    measures honestly *and* presents a real unwinding barrier, where naive
-   discretizations admit none at any resolution (companion methods paper, in
-   prep.). All canonical operators are stencil-local, so they JIT, vectorize,
+   discretizations admit none at any resolution. The solid-angle form is the
+   established best-in-class Hopf-index discretization (most accurate,
+   fastest-converging of four methods benchmarked in Phys. Rev. B **111**,
+   134408 (2025); also packaged as `pyhopf` and a MuMax3 extension); what is
+   new here is carrying it as a *native, differentiable* primitive of a
+   composable, farm-scale engine rather than a post-hoc diagnostic. All
+   canonical operators are stencil-local, so they JIT, vectorize,
    and shard without all-to-all communication; spectral paths ride
    [jaxDecomp](https://github.com/DifferentiableUniverseInitiative/jaxDecomp)
    when distributed FFTs are needed.
