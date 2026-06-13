@@ -23,10 +23,11 @@ from jax_solitons.campaign import (  # noqa: E402
     ProbeAdmission,
     run_campaign,
 )
+from jax_solitons.campaign.protocols import RunContext  # noqa: E402
 from jax_solitons.campaign.reference import HostReport  # noqa: E402
 from jax_solitons.models.faddeev import faddeev_cp1_model  # noqa: E402
 from jax_solitons.runfns import faddeev_relax_then_id  # noqa: E402
-from jax_solitons.runs import RunConfig  # noqa: E402
+from jax_solitons.runs import RunConfig, load_checkpoint  # noqa: E402
 from jax_solitons.seeds import rational_map_hopfion_cp1  # noqa: E402
 from jax_solitons.steppers.adam import adam_flow  # noqa: E402
 
@@ -83,6 +84,71 @@ def test_campaign_idempotent_skip(tmp_path):
     rows_after = sum(1 for _ in (tmp_path / handle.name / "events.jsonl").open())
     assert rows_after == rows_before
     assert sum(1 for _ in (tmp_path / "MANIFEST.jsonl").open()) == 1
+
+
+def test_campaign_resume_bit_identical(tmp_path):
+    """B (headline): a run preempted MID-segments and resumed from its last
+    full-state checkpoint reaches a bit-identical final state to the
+    uninterrupted run.
+
+    This exercises the `ctx.resume` branch in `faddeev_relax_then_id` end to
+    end (its building blocks -- idempotent skip and standalone Adam resume --
+    are covered above, but the wired restart path was not). A `Preempt` raised
+    from the checkpoint callback after 2 of 4 segments stands in for a spot
+    kill: the checkpoint is on disk, no DONE marker, so the next `run_campaign`
+    must load it and finish the remaining segments.
+    """
+    cfg = RunConfig(model="faddeev_cp1", N=16, L=12.0, dtype="float64",
+                    steps=120, params={"R": 2.6, "n": 1, "m": 1, "segments": 4})
+    admission = ProbeAdmission(require_gpu=False)
+
+    # --- uninterrupted reference (never round-trips a checkpoint mid-run) ---
+    ref_reg = FileRunRegistry(tmp_path / "ref")
+    run_campaign([cfg], faddeev_relax_then_id, registry=ref_reg,
+                 sink=JsonlEventSink(), admission=admission,
+                 executor=LocalExecutor())
+    ref_handle = ref_reg.register(cfg)
+    ref_state, _, ref_step = load_checkpoint(ref_handle.dir / "checkpoint.npz")
+
+    # --- preempted run: abort after the 2nd-segment checkpoint lands ---
+    reg = FileRunRegistry(tmp_path / "pre")
+    sink = JsonlEventSink()
+    handle = reg.register(cfg)
+
+    class Preempt(Exception):
+        pass
+
+    saved = {"n": 0}
+
+    def checkpoint(state, step):
+        reg.save(handle, state, step)        # full state hits disk first...
+        saved["n"] += 1
+        if saved["n"] == 2:                  # ...then the host "dies"
+            raise Preempt
+
+    ctx = RunContext(resume=None, checkpoint=checkpoint,
+                     emit=lambda record: sink.emit(handle, record),
+                     trigger=lambda state, reason: sink.trigger(handle, state, reason))
+    with pytest.raises(Preempt):
+        faddeev_relax_then_id(cfg, ctx)
+    assert (handle.dir / "checkpoint.npz").exists()
+    assert not reg.is_complete(handle)       # no DONE -> the resume is required
+    _, _, pre_step = load_checkpoint(handle.dir / "checkpoint.npz")
+    assert pre_step == 60                     # 2 of 4 segments (120 // 4 * 2)
+
+    # --- resume: run_campaign loads the checkpoint and finishes the rest ---
+    run_campaign([cfg], faddeev_relax_then_id, registry=reg, sink=sink,
+                 admission=admission, executor=LocalExecutor())
+    assert reg.is_complete(handle)
+
+    # Bit-identical final state, and the event stream continued without
+    # re-seeding or replaying finished segments (steps strictly increasing).
+    res_state, _, res_step = load_checkpoint(handle.dir / "checkpoint.npz")
+    assert res_step == ref_step == 120
+    assert np.array_equal(np.asarray(res_state["z"]), np.asarray(ref_state["z"]))
+    steps = [json.loads(line)["step"] for line in
+             (handle.dir / "events.jsonl").open()]
+    assert steps == [0, 30, 60, 90, 120]
 
 
 def test_adam_resume_bit_identical():
