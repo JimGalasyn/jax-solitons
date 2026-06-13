@@ -26,4 +26,12 @@ keywords:
   - gpu
 license: MIT
 version: 0.0.1
+doi: 10.5281/zenodo.20680195
 date-released: "2026-06-13"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.20680195
+    description: Concept DOI (resolves to the latest version)
+  - type: doi
+    value: 10.5281/zenodo.20680196
+    description: Version DOI (v0.0.1)

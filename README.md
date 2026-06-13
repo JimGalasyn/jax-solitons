@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/JimGalasyn/jax-solitons/actions/workflows/ci.yml/badge.svg)](https://github.com/JimGalasyn/jax-solitons/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/JimGalasyn/jax-solitons/branch/main/graph/badge.svg)](https://codecov.io/gh/JimGalasyn/jax-solitons)
+[![release](https://img.shields.io/github/v/release/JimGalasyn/jax-solitons?include_prereleases&label=release)](https://github.com/JimGalasyn/jax-solitons/releases)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20680195.svg)](https://doi.org/10.5281/zenodo.20680195)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/JimGalasyn/jax-solitons)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
