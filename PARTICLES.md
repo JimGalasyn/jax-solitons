@@ -4,11 +4,16 @@ This note designs the **separation of particle *generation* from scene
 *composition***: relax each fundamental soliton once (expensive), cache it as a
 first-class object, then stage a scene by *placing* cached particles and running
 a short settle — no per-run relaxation. It is the cached-object form of the
-`TODO.md` item "VOS minimal-superflow seeds + multi-soliton composition", and
-the computational backing for [COMPENDIUM.md](COMPENDIUM.md).
+`TODO.md` item "VOS minimal-superflow seeds + multi-soliton composition".
 
 Status: **design only** — no code yet. Written so the `ParticleCatalog` +
 `compose()` build proceeds against a fixed shape.
+
+**Scope caveat.** This is about *this engine's own* classical field-theory
+solitons. Names like "electron"/"positron" below are **illustrative labels for
+opposite-charge field solitons**, not a claim that a relaxed soliton *is* the
+Standard-Model particle — the NWT compendium is a separate, substrate-algebra
+object that this engine does **not** feed (see [COMPENDIUM.md](COMPENDIUM.md)).
 
 ## Why caching is clean (and what makes a soliton a reusable object)
 
