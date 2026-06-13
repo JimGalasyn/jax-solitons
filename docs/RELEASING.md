@@ -30,7 +30,9 @@ the patch (`0.0.N`) for now; move to `0.1.0` when the campaign contract freezes.
   never changes (it's the badge); each version gets its own version DOI
   (v0.0.1 = `…196`). The **release badge uses `?include_prereleases`** because
   0.0.x are GitHub *pre-releases*.
-- The **codecov badge needs the `CODECOV_TOKEN`** repo secret (already set).
+- The **Codecov *upload step* in CI needs the `CODECOV_TOKEN`** repo secret
+  (already set) — `ci.yml` passes it to `codecov/codecov-action`; without it the
+  upload (and hence the badge/coverage) won't update.
 
 ## Steps
 

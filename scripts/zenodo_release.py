@@ -46,7 +46,10 @@ def read_token() -> str:
     import os
     if os.environ.get("ZENODO_TOKEN"):
         return os.environ["ZENODO_TOKEN"].strip()
-    return Path("~/.zenodo_token").expanduser().read_text().strip()
+    fp = Path("~/.zenodo_token").expanduser()
+    if not fp.exists():
+        sys.exit("no Zenodo token: set $ZENODO_TOKEN or write it to ~/.zenodo_token")
+    return fp.read_text().strip()
 
 
 def req(method, url, token, data=None, raw=False, ctype=None):
@@ -92,14 +95,16 @@ def main():
 
     # 1. draft deposition
     st, dep = req("POST", f"{api}/deposit/depositions", token, data={})
-    assert st in (200, 201), (st, dep)
+    if st not in (200, 201):
+        sys.exit(f"create deposition failed: HTTP {st}: {json.dumps(dep)[:300]}")
     dep_id, bucket = dep["id"], dep["links"]["bucket"]
-    print(f"draft {dep_id}  prereserved {dep['metadata']['prereserve_doi']['doi']}")
+    print(f"draft {dep_id}  pre-reserved {dep['metadata']['prereserve_doi']['doi']}")
 
     # 2. upload to the bucket
     st, up = req("PUT", f"{bucket}/jax-solitons-{ver}.tar.gz", token, data=data,
                  raw=True, ctype="application/octet-stream")
-    assert st in (200, 201), (st, up)
+    if st not in (200, 201):
+        sys.exit(f"upload failed: HTTP {st}: {json.dumps(up)[:300]}")
     print(f"uploaded  checksum {up.get('checksum')}")
 
     # 3. metadata (version + link back to the GitHub tag)
@@ -108,7 +113,8 @@ def main():
         "relation": "isSupplementTo", "scheme": "url"}])
     st, md = req("PUT", f"{api}/deposit/depositions/{dep_id}", token,
                  data={"metadata": meta})
-    assert st == 200, (st, json.dumps(md, indent=2))
+    if st != 200:
+        sys.exit(f"metadata failed: HTTP {st}: {json.dumps(md, indent=2)[:400]}")
     print("metadata attached")
 
     if args.no_publish:
