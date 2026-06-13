@@ -1,6 +1,7 @@
 # jax-solitons
 
 [![CI](https://github.com/JimGalasyn/jax-solitons/actions/workflows/ci.yml/badge.svg)](https://github.com/JimGalasyn/jax-solitons/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/JimGalasyn/jax-solitons/branch/main/graph/badge.svg)](https://codecov.io/gh/JimGalasyn/jax-solitons)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/JimGalasyn/jax-solitons)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

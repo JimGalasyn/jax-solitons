@@ -33,6 +33,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
   "pytest>=8",
+  "pytest-cov>=4",
   # The pure-numpy oracle package is a GitHub release, not on PyPI;
   # CI installs it from git when the oracle-comparison tests land.
 ]

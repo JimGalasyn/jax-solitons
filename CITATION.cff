@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: "jax-solitons: a general JAX engine for classical field-theory solitons"
+message: "If you use this software, please cite it using these metadata."
+type: software
+authors:
+  - given-names: "James P."
+    family-names: Galasyn
+  - given-names: Claude
+    family-names: Théodore
+repository-code: "https://github.com/JimGalasyn/jax-solitons"
+url: "https://github.com/JimGalasyn/jax-solitons"
+abstract: >-
+  A differentiable, composable JAX engine for classical field-theory
+  solitons — Faddeev-Skyrme hopfions, Gross-Pitaevskii vortex knots, and
+  related topological-soliton models — with exactly-quantized (Berg-Lüscher
+  area-form) topological charge and registered, restartable runs designed
+  for GPU-farm-scale campaigns.
+keywords:
+  - solitons
+  - hopfions
+  - skyrmions
+  - faddeev-skyrme
+  - gross-pitaevskii
+  - topological-charge
+  - jax
+  - gpu
+license: MIT
+version: 0.0.1
+date-released: "2026-06-13"
