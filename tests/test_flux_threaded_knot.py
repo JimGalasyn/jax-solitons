@@ -65,10 +65,31 @@ def test_requires_coprime_and_nonzero_e(grid):
         flux_threaded_knot_seed(grid, 2, 3, 1, e=0.0)
 
 
-def test_aspect_ratio_is_order_ten(grid):
-    """kappa = R/a0 on the seed is a sane positive O(10) number (the Paper 16
-    sec.L_3 observable; the relaxed-equilibrium target is the idealized pi^2 ~
-    9.870, or the alpha-pinned refined kappa = 1/sqrt(sqrt2 alpha) = 9.8437)."""
+def test_aspect_ratio_is_a_sane_measurement(grid):
+    """kappa = R/a0 is a sane positive O(10) measurement of the engine's own
+    soliton. The theory TARGET is not asserted here -- it lives in nwt-substrate
+    (see the oracle gate below), per the engine<->theory firewall."""
     kappa, R, a0 = aspect_ratio(flux_threaded_knot_seed(grid, 2, 3, 1), grid, 2, 3)
     assert R > 0 and a0 > 0
     assert 1.0 < kappa < 30.0
+
+
+def test_aspect_ratio_target_comes_from_the_oracle(grid):
+    """Cross-engine firewall: the kappa TARGET is the substrate aspect ratio
+    nwt_substrate.isa.constants.KAPPA_MACKEN ~ 9.844 (the alpha-derived closed
+    form, Paper 17), NOT a value rolled locally. Self-skips when the oracle
+    (optional `oracle` extra) is absent.
+
+    The measured-vs-target EQUIVALENCE gate is the tuned relaxation campaign
+    (Paper 16's f_pi^2/e_Sk^2 at the BPS point + resolution convergence); here
+    we lock down only that the engine's aspect_ratio is the same observable and
+    that the target is sourced from the oracle, not hard-coded."""
+    consts = pytest.importorskip("nwt_substrate.isa.constants")
+    kappa_target = consts.KAPPA_MACKEN
+    # the oracle's own closed-form identity: kappa^2 * sqrt2 = 1/alpha
+    assert kappa_target**2 * np.sqrt(2.0) == pytest.approx(
+        1.0 / consts.ALPHA_SUBSTRATE, rel=1e-9)
+    # the engine measures the same kind of quantity (positive aspect ratio)
+    kappa_meas, _, _ = aspect_ratio(
+        flux_threaded_knot_seed(grid, 2, 3, 1), grid, 2, 3)
+    assert kappa_meas > 0 and 5.0 < kappa_target < 15.0

@@ -168,10 +168,14 @@ def hopf_charge_doublet(state, grid: BoxGrid):
 
 def aspect_ratio(state, grid: BoxGrid, p: int, q: int, v: float = 1.0):
     """Estimate the knot aspect ratio kappa = R / a0 from a relaxed coupled
-    state, via Higgs-core moments. Targets (Paper 16 sec.L_3 / Papers 8a, 11, 17):
-    the idealized Derrick value kappa = pi^2 ~ 9.870, and the alpha-pinned
-    refined value kappa = 1/sqrt(sqrt(2) alpha) = 9.8437 (from alpha = 1/(sqrt2
-    kappa^2) at CODATA alpha; pi^2 matches it to 0.26%).
+    state, via Higgs-core moments. A pure measurement of THIS engine's soliton.
+
+    The theory target it is compared against lives in nwt-substrate, NOT here
+    (the engine<->theory firewall): ``nwt_substrate.isa.constants.KAPPA_MACKEN``
+    = sqrt((25 pi sqrt3 + 1)/sqrt2) ~ 9.844, the substrate aspect ratio derived
+    from alpha (Paper 17); pi^2 ~ 9.870 is the idealized Derrick approximation
+    (Paper 16 sec.L_3). The cross-engine gate (tests) imports that value and
+    self-skips when the oracle is absent.
 
     The core indicator ``w = max(0, 1 - |psi|^2/v^2)`` concentrates on the Higgs
     flux tube (w -> 1 where psi -> 0, -> 0 in the bulk). Then:
