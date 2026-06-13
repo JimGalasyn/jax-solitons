@@ -26,6 +26,12 @@ the patch (`0.0.N`) for now; move to `0.1.0` when the campaign contract freezes.
   drive it with [`scripts/zenodo_release.py`](../scripts/zenodo_release.py)
   (token at `~/.zenodo_token`, production `zenodo.org`). **Publishing is
   permanent** — a published record can't be deleted, only superseded.
+- **PyPI publishes automatically** from the published GitHub Release via trusted
+  publishing (OIDC, no token — `.github/workflows/publish-pypi.yml`). The built
+  version comes from the static version fields, so make sure they match the tag.
+  A one-time *pending publisher* registration is needed before the first publish
+  (see step 3). `nwt-substrate` must be on PyPI first (the `oracle` extra now
+  depends on it as a normal version specifier).
 - Concept DOI **`10.5281/zenodo.20680195`** resolves to the latest version and
   never changes (it's the badge); each version gets its own version DOI
   (v0.0.1 = `…196`). The **release badge uses `?include_prereleases`** because
@@ -66,6 +72,15 @@ gh release create vX.Y.Z --target main --prerelease \
 
 Drop `--prerelease` (and the `?include_prereleases` on the badge) once you ship
 ≥ `0.1.0`.
+
+Publishing the Release also triggers `publish-pypi.yml` (build → `twine check` →
+PyPI via trusted publishing). Confirm: `gh run list --workflow publish-pypi.yml -L1`
+and `curl -s https://pypi.org/pypi/jax-solitons/json -o /dev/null -w '%{http_code}\n'`.
+
+> **One-time PyPI setup (first publish only):** register a *pending publisher* on
+> pypi.org (Account → Publishing) — Project `jax-solitons`, Owner `JimGalasyn`,
+> Repo `jax-solitons`, Workflow `publish-pypi.yml`, Environment `pypi` — and create
+> a GitHub Environment named `pypi`.
 
 ### 4. Mint the Zenodo DOI
 
@@ -113,7 +128,9 @@ PR, CI green, merge. Optionally refresh the Release body:
 - [ ] `main` CI green
 - [ ] version bumped in `pyproject.toml` + `src/jax_solitons/__init__.py` +
       `CITATION.cff` (PR merged)
-- [ ] `gh release create vX.Y.Z --prerelease` (tag + Release)
+- [ ] (first publish only) PyPI pending publisher + `pypi` GitHub Environment registered
+- [ ] `gh release create vX.Y.Z --prerelease` (tag + Release → triggers PyPI)
+- [ ] PyPI publish workflow green; package resolves on pypi.org
 - [ ] `python scripts/zenodo_release.py vX.Y.Z` → concept + version DOIs recorded
 - [ ] DOI backfill PR (`CITATION.cff` `doi`/`identifiers`; README badge if first
       release)

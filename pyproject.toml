@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jax-solitons"
-version = "0.0.1"
+version = "0.0.2"
 description = "A general JAX engine for classical field-theory solitons: composable energy functionals, topology-preserving discretizations, GPU-farm-ready relaxation and dynamics."
 readme = "README.md"
 license = { text = "MIT" }
@@ -37,17 +37,16 @@ test = [
 ]
 oracle = [
   # Pure-numpy reference engine for the cross-engine equivalence test
-  # (tests/test_oracle_equivalence.py). Public repo, not on PyPI -> git install.
-  # tests/test_oracle_equivalence.py self-skips when absent, so it stays
-  # optional for local dev; CI installs ".[test,oracle]" to run it.
-  #
-  # PINNED to a release tag for reproducible CI: an unpinned default branch could
-  # change/break this gate from upstream. The gate catches *this* repo's drift
-  # against the pinned oracle; bump the tag intentionally to re-validate against a
-  # newer nwt-substrate. v0.5.0 is the first release carrying solitons.faddeev
-  # (concept DOI 10.5281/zenodo.20012027) — a citable, DOI-backed pin per
-  # nwt-substrate's code_division_policy, preferred over a bare SHA.
-  "nwt-substrate @ git+https://github.com/JimGalasyn/nwt-substrate.git@v0.5.0",
+  # (tests/test_oracle_equivalence.py). nwt-substrate is on PyPI as of v0.5.0, so
+  # this is a plain version specifier (PyPI forbids direct-reference git URLs in
+  # published metadata). tests/test_oracle_equivalence.py self-skips when absent,
+  # so it stays optional for local dev; CI installs ".[test,oracle]" to run it.
+  # PINNED EXACTLY for reproducible CI: the equivalence gate is sensitive to
+  # upstream changes, so a floor (>=) could break/drift it whenever nwt-substrate
+  # publishes. Bump this pin intentionally to re-validate against a newer oracle.
+  # v0.5.0 is the first release carrying solitons.faddeev (concept DOI
+  # 10.5281/zenodo.20012027).
+  "nwt-substrate==0.5.0",
 ]
 sharding = [
   "jaxdecomp>=0.3",  # distributed 3D FFT + halo exchange
@@ -64,10 +63,6 @@ Issues = "https://github.com/JimGalasyn/jax-solitons/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/jax_solitons"]
-
-[tool.hatch.metadata]
-# The `oracle` extra references nwt-substrate by git URL (public, not on PyPI).
-allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

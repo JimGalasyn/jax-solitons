@@ -25,13 +25,13 @@ keywords:
   - jax
   - gpu
 license: MIT
-version: 0.0.1
+version: 0.0.2
 doi: 10.5281/zenodo.20680195
 date-released: "2026-06-13"
 identifiers:
   - type: doi
     value: 10.5281/zenodo.20680195
     description: Concept DOI (resolves to the latest version)
-  - type: doi
-    value: 10.5281/zenodo.20680196
-    description: Version DOI (v0.0.1)
+  # Per-version DOIs are backfilled (most-recent first) after each Zenodo mint —
+  # see docs/RELEASING.md step 5. Omitted until v0.0.2's version DOI is minted, so
+  # this file never advertises a version DOI that doesn't match `version` above.

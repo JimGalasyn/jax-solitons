@@ -7,9 +7,9 @@ bit-identically against the source research engine" claim. This test makes that
 claim **live**: it builds one identical hopfion field and asserts both engines'
 energy and Hopf charge agree, so the two implementations cannot silently drift.
 
-The oracle (``nwt-substrate``) is an optional, git-installed dependency (see the
-``oracle`` extra in pyproject; CI installs ``.[test,oracle]``); when it is absent
-the whole module is skipped.
+The oracle (``nwt-substrate``) is an optional PyPI dependency, pinned to the exact
+validated version (see the ``oracle`` extra in pyproject; CI installs
+``.[test,oracle]``); when it is absent the whole module is skipped.
 """
 from __future__ import annotations
 
