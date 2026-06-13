@@ -9,11 +9,12 @@ the physics a `RunContext` wired to the registry and sink.
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from jax_solitons.campaign.protocols import (
     Admission,
     EventSink,
+    Executor,
     RunConfig,
     RunContext,
     RunFn,
@@ -28,7 +29,7 @@ def run_campaign(
     registry: RunRegistry,
     sink: EventSink,
     admission: Admission,
-    executor,
+    executor: Executor,
 ) -> None:
     """Run every config through `run_fn` over `executor`, with restart + records.
 
@@ -40,9 +41,10 @@ def run_campaign(
     Registration is lazy: the run dir + manifest line are written by the worker
     that runs the config, not pre-flighted on the submitting node. At 10^4-10^6
     scale an eager `[register(c) for c in configs]` would serialize that many
-    mkdir + manifest appends on one node before any work starts. (The task
-    thunks are still materialized here; streaming the work queue itself is the
-    Executor's job -- see SkyPilotExecutor.)
+    mkdir + manifest appends on one node before any work starts. The task thunks
+    stream too -- a generator is handed to the Executor (`Executor.run` takes an
+    Iterable), so neither the configs nor the thunks are materialized here; how
+    far the work queue itself streams is then the Executor's choice.
     """
     def task_for(config):
         def task():
@@ -67,4 +69,4 @@ def run_campaign(
                 sink.close(handle)
         return task
 
-    executor.run([task_for(c) for c in configs], admission)
+    executor.run((task_for(c) for c in configs), admission)   # lazy generator

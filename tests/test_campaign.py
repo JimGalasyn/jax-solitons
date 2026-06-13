@@ -222,3 +222,15 @@ def test_adam_observer_global_step():
     adam_flow(model, z1, grid, lr=2e-3, steps=4, observe_every=2, observer=obs,
               opt_state=opt, return_opt_state=True)
     assert seen == [0, 2, 4, 4, 6, 8]        # monotone & global across the resume
+
+
+def test_admission_rejects_failed_probe():
+    """E (P9): a host whose probe FAILED (probe_ok=False) is a hard reject even
+    with require_gpu=False — never 'runs anyway' on an unprobed host. Without
+    the fix, require_gpu=False would bypass the GPU/mem gates and admit it."""
+    adm = ProbeAdmission(require_gpu=False, min_mem_gb=0.0, min_mbps=0.0)
+    adm.probe = lambda: HostReport(
+        has_gpu=False, device_name="probe-failed: boom", free_mem_gb=0.0,
+        outbound_mbps=float("inf"), probe_ok=False)
+    with pytest.raises(AdmissionError):
+        adm.guard()

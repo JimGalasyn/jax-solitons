@@ -54,8 +54,10 @@ RunFn = Callable[[RunConfig, RunContext], dict]
 `RunContext` hands the physics four orchestration capabilities and nothing
 else: `ctx.resume` (prior full state or `None`), `ctx.checkpoint(state, step)`,
 `ctx.emit(record)`, `ctx.trigger(state, reason)`. The physics returns a small
-result record. **No module under `campaign/` imports a model, a stepper, or
-jax** (beyond the array-I/O already in `runs.py`). That discipline is what
+result record. **No module under `campaign/` imports a model or a stepper**,
+and the protocol + driver surface is jax-free (beyond the array-I/O already in
+`runs.py`); the lone jax touch is the reference `ProbeAdmission`, which imports
+jax lazily to query the device. That no-physics-coupling discipline is what
 keeps the layer extractable.
 
 ## Extraction plan (rule of three)
@@ -71,8 +73,11 @@ version-lock friction and a guessed-at abstraction.
 
 ## Status
 
-Sketch only. `protocols.py` is the contract; `reference.py` has thin
-local-machine implementations (functional) plus a `SkyPilotExecutor` stub
-(documents the intended mapping, raises `NotImplementedError`). Nothing here
-is wired into CI yet — it is the boundary, drawn, so the collider-campaign
-work (TODO.md) builds against a fixed contract.
+`protocols.py` is the contract; `reference.py` has thin local-machine
+implementations (functional) plus a `SkyPilotExecutor` stub (documents the
+intended mapping, raises `NotImplementedError`). The local/reference path is
+**CI-gated** — `tests/test_campaign.py` drives the A/B/C/E contract end-to-end
+(including the relax-then-ID `RunFn` and bit-identical resume) under the default
+`pytest` job; only the SkyPilot executor remains stubbed. The boundary is drawn
+and tested, so the collider-campaign work (TODO.md) builds against a fixed,
+exercised contract.
