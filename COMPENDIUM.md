@@ -2,7 +2,7 @@
 
 The **compendium is defined canonically in another repo**:
 `null-worldtube/docs/compendium/nwt_particles.db` — a SQLite database of the
-project's particle catalogue, destined for a browsable "periodic table" site.
+project's particle catalog, destined for a browsable "periodic table" site.
 This note exists to draw an **honest boundary**: the compendium and this engine
 are different objects, and a recent audit showed the naive bridge between them
 *fails*. Documenting that keeps future work from conflating them.
@@ -40,7 +40,7 @@ match the compendium's carrier. There is no direct walk-to-field-soliton map.
 Two consequences, stated plainly:
 - **The NWT compendium objects are substrate-algebra K₇ walks, not classical
   field-theory solitons.** jax-solitons relaxes the latter; the compendium
-  catalogues the former. Different ontologies.
+  catalogs the former. Different ontologies.
 - Whether any NWT walk has a **classical-field-soliton realization at all** is
   an open question this engine has *not* answered — and §178 is evidence against
   the obvious topological correspondence.

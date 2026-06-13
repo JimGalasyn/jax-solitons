@@ -21,9 +21,9 @@ A relaxed soliton **decays to exact vacuum beyond its core radius** — the
 rational-map seed already guarantees this (`d >= w` ⟹ vacuum), and a relaxed
 state inherits it. Spatial compactness is what makes a particle reusable: two of
 them placed far apart barely interact until evolved. And the storage primitive
-already exists — `runs.save_checkpoint` serializes the full state + `RunConfig`
-+ `config_hash`. A catalog entry is just a checkpoint keyed by *physics identity*
-rather than *run identity*.
+already exists — `runs.save_checkpoint` serializes the full state + the
+`RunConfig` (whose `config_hash` is derived from its JSON). A catalog entry is
+just a checkpoint keyed by *physics identity* rather than *run identity*.
 
 ## `ParticleCatalog`
 
@@ -47,8 +47,8 @@ is the parity/orientation conjugate of the electron (`n → reflected`, or
 ## `compose(scene)`
 
 ```python
-scene = [ place(electron, at=(-X, 0, 0), boost=+v * x̂),
-          place(positron, at=(+X, 0, 0), boost=-v * x̂) ]
+scene = [ place("electron", at=(-X, 0, 0), boost=(+v, 0, 0)),
+          place("positron", at=(+X, 0, 0), boost=(-v, 0, 0)) ]
 field, momentum = compose(scene, grid=BoxGrid(N=256, L=72))
 evolve(field, momentum, steps=...)        # relax/integrate *that* scene
 ```
@@ -61,7 +61,8 @@ momentum.
 
 1. **You cannot superpose constrained fields.** `n₁ + n₂` violates `|n| = 1`.
    For well-separated, vacuum-decaying particles the fix is **gluing** (a smooth
-   partition-of-unity patch, which the seed machinery already does); for
+   partition-of-unity patch `compose` will implement, building on the
+   exact-vacuum-beyond-radius property the seeds already guarantee); for
    close-packed cores it is the **product ansatz** (compose in the group rep —
    Skyrme's SU(2) multiplication). Far apart = clean; overlapping cores = hard.
 2. **A boost is not just a velocity vector.** The Faddeev model is relativistic:
