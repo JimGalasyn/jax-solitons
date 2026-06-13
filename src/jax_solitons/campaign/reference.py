@@ -10,7 +10,6 @@ at extraction those helpers move into the standalone package.
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 from jax_solitons.campaign.protocols import (
@@ -102,7 +101,11 @@ class ProbeAdmission:
 
     The probes here are structurally real but minimal -- the production version
     measures an actual outbound transfer and a real device query. The point is
-    the SHAPE: measure, write what was measured, refuse on failure.
+    the SHAPE: measure, write what was measured, refuse on failure. Operational
+    caveat: until `_outbound_mbps` times a real upload it returns +inf, so the
+    LIVE guard today is effectively a GPU-presence + free-memory gate; the
+    zero-outbound rejection (E's motivating failure) is exercised only by the
+    mocked test. Wiring the real transfer is what makes E load-bearing.
     """
 
     def __init__(self, *, min_mem_gb: float = 4.0, min_mbps: float = 1.0,
@@ -144,7 +147,11 @@ class ProbeAdmission:
             stats = getattr(d, "memory_stats", lambda: {})() or {}
             limit = stats.get("bytes_limit", 0)
             used = stats.get("bytes_in_use", 0)
-            return True, str(d.device_kind), max(limit - used, 0) / 1e9
+            # No memory_stats (limit==0) means UNKNOWN, not zero -- reporting 0.0
+            # would falsely fail the mem gate on a healthy GPU. Don't block on a
+            # capacity we couldn't measure.
+            free_gb = (max(limit - used, 0) / 1e9) if limit else float("inf")
+            return True, str(d.device_kind), free_gb
         except Exception as e:  # probing must never crash the worker -- it reports
             return False, f"probe-failed: {e}", 0.0
 
@@ -195,8 +202,3 @@ class SkyPilotExecutor:
         raise NotImplementedError(
             "SkyPilotExecutor is a contract stub; use LocalExecutor until the "
             "fleet layer lands (CAMPAIGN.md, TODO.md collider-campaign item 4).")
-
-
-def _self_check_available() -> bool:
-    """True if SkyPilot is importable (so the executor could be wired)."""
-    return shutil.which("sky") is not None

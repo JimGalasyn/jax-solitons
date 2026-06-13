@@ -32,14 +32,21 @@ def run_campaign(
 ) -> None:
     """Run every config through `run_fn` over `executor`, with restart + records.
 
-    Per run: register (A) -> skip if complete (D recovery) -> resume from full
-    state or start fresh (B) -> run physics with a wired RunContext (C) ->
-    finish. Admission (E) is enforced by the executor on each worker.
-    """
-    handles = [registry.register(c) for c in configs]
+    Per run, ON THE WORKER that picks it up: register (A) -> skip if complete
+    (D recovery) -> resume from full state or start fresh (B) -> run physics
+    with a wired RunContext (C) -> finish. Admission (E) is enforced by the
+    executor on each worker before any task runs.
 
-    def task_for(handle):
+    Registration is lazy: the run dir + manifest line are written by the worker
+    that runs the config, not pre-flighted on the submitting node. At 10^4-10^6
+    scale an eager `[register(c) for c in configs]` would serialize that many
+    mkdir + manifest appends on one node before any work starts. (The task
+    thunks are still materialized here; streaming the work queue itself is the
+    Executor's job -- see SkyPilotExecutor.)
+    """
+    def task_for(config):
         def task():
+            handle = registry.register(config)            # registered by its worker
             if registry.is_complete(handle):
                 return                                    # preemption no-op (P4/D)
             resume = registry.load(handle)
@@ -49,9 +56,9 @@ def run_campaign(
                 emit=lambda record: sink.emit(handle, record),
                 trigger=lambda state, reason: sink.trigger(handle, state, reason),
             )
-            result = run_fn(handle.config, ctx)
+            result = run_fn(config, ctx)
             registry.finish(handle, result)
             sink.close(handle)
         return task
 
-    executor.run([task_for(h) for h in handles], admission)
+    executor.run([task_for(c) for c in configs], admission)

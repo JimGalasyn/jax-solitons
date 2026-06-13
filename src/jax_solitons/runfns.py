@@ -56,9 +56,13 @@ def faddeev_relax_then_id(config: RunConfig, ctx: RunContext) -> dict:
     dtype = jnp.float64 if config.dtype == "float64" else jnp.float32
     grid = BoxGrid(N=config.N, L=config.L, dtype=dtype)
     model = faddeev_cp1_model(c4=p.get("c4", 4.0))
-    n_seg = int(p.get("segments", 8))
     lr = p.get("lr", 2e-3)
-    seg_steps = max(1, config.steps // n_seg)
+    n_seg = max(1, min(int(p.get("segments", 8)), config.steps))
+    # Distribute the remainder so the executed steps sum to EXACTLY config.steps
+    # (a fixed steps//n_seg silently drops it -- a provenance smell for a
+    # provenance layer). Divisible configs are unchanged (e.g. 120/4 -> 30x4).
+    base, rem = divmod(config.steps, n_seg)
+    seg_lengths = [base + (1 if i < rem else 0) for i in range(n_seg)]
 
     # Resume from a checkpoint (contract B) or seed a fresh rational-map hopfion.
     if ctx.resume is not None:
@@ -73,11 +77,12 @@ def faddeev_relax_then_id(config: RunConfig, ctx: RunContext) -> dict:
         ctx.emit(_ledger_row(model, z, grid, 0))
 
     # Segmented descent: emit + checkpoint full optimizer state between chunks.
+    step = sum(seg_lengths[:seg0])          # cumulative step at the resume point
     for seg in range(seg0, n_seg):
         z, _obs, opt = adam_flow(
-            model, z, grid, lr=lr, steps=seg_steps,
+            model, z, grid, lr=lr, steps=seg_lengths[seg],
             opt_state=opt, return_opt_state=True)
-        step = (seg + 1) * seg_steps
+        step += seg_lengths[seg]
         ctx.emit(_ledger_row(model, z, grid, step))
         m, v, t = opt
         ctx.checkpoint({
@@ -86,7 +91,7 @@ def faddeev_relax_then_id(config: RunConfig, ctx: RunContext) -> dict:
         }, step)
 
     # Quench complete -> relax-then-ID (P7): trace the core {n1=0, n2=0, n3>0}.
-    result = _ledger_row(model, z, grid, n_seg * seg_steps)
+    result = _ledger_row(model, z, grid, step)   # step == config.steps exactly
     nf = np.asarray(n_from_state(z))
     try:
         curves = trace_curves(nf[0], nf[1], grid, mask=nf[2] > 0)

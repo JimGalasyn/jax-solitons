@@ -182,3 +182,22 @@ def test_admission_probe_or_bail():
         adm.guard()
     adm.probe = lambda: good
     assert adm.guard().outbound_mbps == 100.0
+
+
+def test_campaign_step_count_exact(tmp_path):
+    """#4 provenance: when steps isn't divisible by segments, the executed
+    steps still sum to exactly config.steps (the remainder is distributed, not
+    dropped), and the ledger labels match."""
+    registry = FileRunRegistry(tmp_path)
+    sink = JsonlEventSink()
+    admission = ProbeAdmission(require_gpu=False)
+    cfg = RunConfig(model="faddeev_cp1", N=12, L=10.0, dtype="float64",
+                    steps=100, params={"R": 2.2, "segments": 3})  # 100/3 -> 34,33,33
+
+    run_campaign([cfg], faddeev_relax_then_id, registry=registry, sink=sink,
+                 admission=admission, executor=LocalExecutor())
+
+    run = tmp_path / cfg.run_name()
+    steps = [json.loads(line)["step"] for line in (run / "events.jsonl").open()]
+    assert steps == [0, 34, 67, 100]                       # no dropped remainder
+    assert json.loads((run / "DONE.json").read_text())["step"] == 100
