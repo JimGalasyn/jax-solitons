@@ -37,8 +37,9 @@ def adam_flow(model: Model, state, grid: BoxGrid, *, lr=2e-3, steps=5000,
     For checkpointable / restartable descent (campaign contract B, P4), pass
     `opt_state=(m, v, t)` from a prior call's `return_opt_state=True` result:
     the moment estimates and the bias-correction step counter carry over, so a
-    segmented run is bit-identical to the uninterrupted one. The schedule sees
-    the GLOBAL step `t`, not a per-segment reset.
+    segmented run is bit-identical to the uninterrupted one. Both the schedule
+    AND the observer see the GLOBAL step `t`, not a per-segment reset, so
+    observation labels stay monotone across a resume.
     """
     grad = jax.grad(lambda s: model.energy(s, grid))
     constraint = model.constraint
@@ -66,10 +67,10 @@ def adam_flow(model: Model, state, grid: BoxGrid, *, lr=2e-3, steps=5000,
     obs = []
     for i in range(steps):
         if observer and observe_every and (i % observe_every == 0):
-            obs.append(observer(i, state))
+            obs.append(observer(t0 + i, state))   # global step, not segment-local
         state, m, v = step(state, m, v, t0 + i + 1)
     if observer:
-        obs.append(observer(steps, state))
+        obs.append(observer(t0 + steps, state))
     if return_opt_state:
         return state, obs, (m, v, t0 + steps)
     return state, obs

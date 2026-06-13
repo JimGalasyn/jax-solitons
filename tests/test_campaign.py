@@ -47,11 +47,12 @@ def test_campaign_drives_full_pipeline(tmp_path):
     run = tmp_path / cfg.run_name()
     # A: config-hashed dir + a manifest line
     assert (run / "config.json").exists()
-    assert sum(1 for _ in (tmp_path / "MANIFEST.jsonl").open()) == 1
+    assert len((tmp_path / "MANIFEST.jsonl").read_text().splitlines()) == 1
     # B: a full-state checkpoint was written
     assert (run / "checkpoint.npz").exists()
     # C: streamed ledger (seed row + one per segment)
-    rows = [json.loads(line) for line in (run / "events.jsonl").open()]
+    rows = [json.loads(line)
+            for line in (run / "events.jsonl").read_text().splitlines()]
     assert len(rows) == 4
     assert rows[-1]["step"] == 120
     # finish: result record with the core census
@@ -76,14 +77,15 @@ def test_campaign_idempotent_skip(tmp_path):
                  admission=admission, executor=LocalExecutor())
     handle = registry.register(cfg)
     assert registry.is_complete(handle)
-    rows_before = sum(1 for _ in (tmp_path / handle.name / "events.jsonl").open())
+    events = tmp_path / handle.name / "events.jsonl"
+    rows_before = len(events.read_text().splitlines())
 
     # Re-run: skipped, so neither the ledger nor the manifest grows.
     run_campaign([cfg], faddeev_relax_then_id, registry=registry, sink=sink,
                  admission=admission, executor=LocalExecutor())
-    rows_after = sum(1 for _ in (tmp_path / handle.name / "events.jsonl").open())
+    rows_after = len(events.read_text().splitlines())
     assert rows_after == rows_before
-    assert sum(1 for _ in (tmp_path / "MANIFEST.jsonl").open()) == 1
+    assert len((tmp_path / "MANIFEST.jsonl").read_text().splitlines()) == 1
 
 
 def test_campaign_resume_bit_identical(tmp_path):
@@ -147,7 +149,7 @@ def test_campaign_resume_bit_identical(tmp_path):
     assert res_step == ref_step == 120
     assert np.array_equal(np.asarray(res_state["z"]), np.asarray(ref_state["z"]))
     steps = [json.loads(line)["step"] for line in
-             (handle.dir / "events.jsonl").open()]
+             (handle.dir / "events.jsonl").read_text().splitlines()]
     assert steps == [0, 30, 60, 90, 120]
 
 
@@ -198,6 +200,25 @@ def test_campaign_step_count_exact(tmp_path):
                  admission=admission, executor=LocalExecutor())
 
     run = tmp_path / cfg.run_name()
-    steps = [json.loads(line)["step"] for line in (run / "events.jsonl").open()]
+    steps = [json.loads(line)["step"]
+             for line in (run / "events.jsonl").read_text().splitlines()]
     assert steps == [0, 34, 67, 100]                       # no dropped remainder
     assert json.loads((run / "DONE.json").read_text())["step"] == 100
+
+
+def test_adam_observer_global_step():
+    """adam.py: across a resume (opt_state carried), the observer sees the
+    GLOBAL step, not a per-segment reset — matching the bias-correction/LR
+    counter. Without the fix the second segment would relabel from 0."""
+    from jax_solitons.grid import BoxGrid
+    grid = BoxGrid(N=12, L=10.0, dtype=jnp.float64)
+    model = faddeev_cp1_model(c4=4.0)
+    z0 = rational_map_hopfion_cp1(grid, R=2.2, n=1, m=1)
+
+    seen = []
+    obs = lambda step, state: seen.append(int(step))
+    z1, _, opt = adam_flow(model, z0, grid, lr=2e-3, steps=4,
+                           observe_every=2, observer=obs, return_opt_state=True)
+    adam_flow(model, z1, grid, lr=2e-3, steps=4, observe_every=2, observer=obs,
+              opt_state=opt, return_opt_state=True)
+    assert seen == [0, 2, 4, 4, 6, 8]        # monotone & global across the resume
