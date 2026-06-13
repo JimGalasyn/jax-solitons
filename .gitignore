@@ -6,3 +6,7 @@ build/
 .venv/
 .pytest_cache/
 output/
+
+# coverage artifacts
+.coverage
+coverage.xml

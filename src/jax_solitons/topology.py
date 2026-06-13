@@ -13,8 +13,12 @@ two triangles (Van Oosterom-Strackee per triangle):
 
 This is an exact topological density (sums to 2*pi*integer over closed
 surfaces), so it carries the unwinding barrier that naive same-index
-discretizations of d_i n x d_j n lack at every resolution. Companion
-methods paper, in prep.
+discretizations of d_i n x d_j n lack at every resolution. The solid-angle
+form is the established best-in-class Hopf-index discretization (Phys. Rev.
+B 111, 134408 (2025) benchmarks it as the most accurate and fastest-
+converging of four methods); the contribution here is exposing it as a
+native, differentiable jax.grad-able primitive rather than a post-hoc
+diagnostic.
 
 Field convention throughout: n has shape (3, N, N, N) (leading component
 axis); a leading batch axis may be added via vmap.

@@ -1,5 +1,10 @@
 # jax-solitons
 
+[![CI](https://github.com/JimGalasyn/jax-solitons/actions/workflows/ci.yml/badge.svg)](https://github.com/JimGalasyn/jax-solitons/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/JimGalasyn/jax-solitons/branch/main/graph/badge.svg)](https://codecov.io/gh/JimGalasyn/jax-solitons)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/JimGalasyn/jax-solitons)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 > **Status: pre-alpha (0.0.x).** The API is being designed in the open and
 > **will** change without notice until 0.1. Nothing here is stable yet.
 
@@ -10,9 +15,15 @@ designed for GPU farms.
 ## Why another soliton code?
 
 The field's first public GPU soliton codes (cuSkyrmion, soliton_solver, 2026)
-are CUDA C / Numba and single-purpose. `jax-solitons` aims to be the
-differentiable, composable, farm-scale counterpart, built on four design
-commitments:
+are CUDA C / Numba: single-GPU, forward-only (no autodiff), and either
+single-theory (cuSkyrmion: Skyrme variants) or 2D (soliton_solver: a
+composable 8-theory core, but planar). The mature neighbours are similar in
+shape — mumax3/mumax+ (CUDA micromagnetics, forward-only) and the GPE/BEC
+split-step solvers (GPUE, TorchGPE, PyGPE) are each single-physics and
+single-GPU; only PyTorch's magnum.np is genuinely differentiable, and only
+for finite-difference micromagnetics. `jax-solitons` aims to be the
+differentiable, composable, 3D, farm-scale counterpart that occupies the
+intersection none of them do, built on four design commitments:
 
 1. **One `Model` abstraction.** A model is a field with a manifold constraint,
    an energy that is a sum of composable local terms (E₂, Skyrme E₄, |B|²,
@@ -25,14 +36,24 @@ commitments:
 3. **Topology-preserving, stencil-local numerics.** The topological charge is
    discretized by the Berg-Lüscher plaquette solid-angle (area form) — which
    measures honestly *and* presents a real unwinding barrier, where naive
-   discretizations admit none at any resolution (companion methods paper, in
-   prep.). All canonical operators are stencil-local, so they JIT, vectorize,
+   discretizations admit none at any resolution. The solid-angle form is the
+   established best-in-class Hopf-index discretization (most accurate,
+   fastest-converging of four methods benchmarked in Phys. Rev. B **111**,
+   134408 (2025); also packaged as `pyhopf` and a MuMax3 extension); what is
+   new here is carrying it as a *native, differentiable* primitive of a
+   composable, farm-scale engine rather than a post-hoc diagnostic. All
+   canonical operators are stencil-local, so they JIT, vectorize,
    and shard without all-to-all communication; spectral paths ride
    [jaxDecomp](https://github.com/DifferentiableUniverseInitiative/jaxDecomp)
    when distributed FFTs are needed.
-4. **Restartable, registered runs.** A `RunConfig` dataclass serialized into
-   every output; full-state checkpoints (field + velocity/optimizer state +
-   RNG key) via orbax; config-hashed run manifests; a thin sweep driver.
+4. **Restartable, registered runs over a fleet.** Orchestration is a
+   physics-agnostic campaign contract (the only soliton-specific thing crossing
+   it is an injected `RunFn`): a config-hashed registry + full-state checkpoints
+   (field + velocity/optimizer state + RNG key) for bit-identical restart;
+   streaming event-records, with full fields kept only on triggered events;
+   probe-or-bail host admission; all over a pluggable executor (local now;
+   SkyPilot for spot fleets, stubbed). A literature sweep found no library
+   covers this combination — see [CAMPAIGN.md](CAMPAIGN.md).
 
 Design principles (the scale-first contract every PR is reviewed
 against) are in [DESIGN.md](DESIGN.md).
@@ -84,7 +105,9 @@ libraries become toys.
 | `seeds` | rational-map hopfion ansatz | **working, validated** |
 | `seeds` | solid-angle (VOS) minimal superflow, composition | porting |
 | `runs` | `RunConfig`; full-state restartable checkpoints (bit-identical restart, gated in CI); config-hashed run dirs + manifest | **working, gated** |
+| `campaign` | the A/B/C/E boundary — `RunRegistry`, `EventSink`, `Admission`, `Executor` protocols + `run_campaign`; local reference backends + `SkyPilotExecutor` stub | **working, gated** |
 | `measure` | implicit core-curve tracer (lax.scan predictor-corrector), Gauss linking, arc-length resampling | **working, gated** |
+| `runfns` / `examples` | `faddeev_relax_then_id` (relax-then-ID behind the campaign contract) + a runnable two-run campaign | **working, gated** |
 
 Batch-first state (`vmap`) is demonstrated in CI: a vmapped dynamics step
 over a stack of fields is verified identical to stepping each field
@@ -124,6 +147,34 @@ engine's convention: **hunt in fp32, certify in fp64** — dtype is an explicit
 ```bash
 pip install -e ".[test]"
 pytest
+```
+
+## Quickstart
+
+Relax a unit hopfion and read off its energy and (exactly quantized) Hopf
+charge:
+
+```python
+import jax
+jax.config.update("jax_enable_x64", True)          # certify in fp64
+
+from jax_solitons.grid import BoxGrid
+from jax_solitons.seeds import rational_map_hopfion_cp1
+from jax_solitons.models.faddeev import faddeev_cp1_model, hopf_charge_cp1
+from jax_solitons.steppers.adam import adam_flow
+
+grid = BoxGrid(N=24, L=16.0)                        # dtype defaults to fp32
+model = faddeev_cp1_model(c4=4.0)                   # Faddeev-Skyrme, CP¹ frame
+z = rational_map_hopfion_cp1(grid, R=3.5, n=1, m=1) # a Q_H = 1 seed
+z, _ = adam_flow(model, z, grid, lr=2e-3, steps=2000)   # more steps on a GPU
+print(float(model.energy(z, grid)), float(hopf_charge_cp1(z, grid)))  # E, Q_H≈1
+```
+
+To run the same physics as a **registered, restartable campaign** (config-hashed
+run dirs, streamed ledgers, triggered core-curve capture):
+
+```bash
+JAX_ENABLE_X64=1 python examples/faddeev_campaign.py   # writes _campaign_out/
 ```
 
 ## License

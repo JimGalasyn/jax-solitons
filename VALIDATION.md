@@ -17,7 +17,7 @@ GPU box: `SOLITON_GPU_TIER=1 pytest tests/test_gpu_tier.py -v -s`.
 
 | Claim | Test | Why it's exact |
 |---|---|---|
-| Area-form flux quantization: the Berg-Lüscher plaquette sums to 4π × (integer degree) over every closed 2-torus slice, for arbitrary smooth fields | `test_area_form_flux_quantized_on_random_maps` | each plaquette is the exact solid angle of a spherical quadrilateral; closed surfaces tile. The naive same-index discretization of n·(∂ᵢn×∂ⱼn) has no such quantization at any resolution — this property is the library's reason to exist |
+| Area-form flux quantization: the Berg-Lüscher plaquette sums to 4π × (integer degree) over every closed 2-torus slice, for arbitrary smooth fields | `test_area_form_flux_quantized_on_random_maps` | each plaquette is the exact solid angle of a spherical quadrilateral; closed surfaces tile. The naive same-index discretization of n·(∂ᵢn×∂ⱼn) has no such quantization at any resolution. The solid-angle form is independently benchmarked as the most accurate, fastest-converging Hopf-index discretization (Phys. Rev. B 111, 134408 (2025)); here it is the exactly-quantized, differentiable core the engine is built on |
 | Hopf charge of the rational-map seed (n,m) is n·m | `test_hopf_charge_integer_on_seeds` | degree of the composed map |
 | Energy and Q_H invariant under lattice translations | `test_energy_translation_invariant` | periodic stencils; same summands |
 | Energy and Q_H invariant under global O(3) target rotations | `test_energy_global_o3_invariant` | the energy is built from invariants of n |
