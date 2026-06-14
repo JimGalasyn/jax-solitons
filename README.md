@@ -140,9 +140,12 @@ that port.
 ## Precision
 
 fp32 is ~4.4× faster than fp64 on consumer GPUs for these workloads with
-conservation identical to four decimals (memory-bandwidth-bound). The
-engine's convention: **hunt in fp32, certify in fp64** — dtype is an explicit
-`BoxGrid` parameter, never a global flag.
+conservation identical to four decimals (memory-bandwidth-bound). That figure
+is for energy descent and short integration; long real-time Hamiltonian
+evolution (e.g. Kibble–Zurek-length runs) accumulates fp32 phase error that
+step-wise conservation hides, so time-resolved dynamics are certified in fp64.
+The engine's convention: **hunt in fp32, certify in fp64** — dtype is an
+explicit `BoxGrid` parameter, never a global flag.
 
 ## Install (development)
 

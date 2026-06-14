@@ -49,8 +49,10 @@ GPU box: `SOLITON_GPU_TIER=1 pytest tests/test_gpu_tier.py -v -s`.
 ## Known limits
 
 - fp32 endpoints match x64 to 4 significant figures for relaxation and to
-  ~conservation level for dynamics (memory-bandwidth-bound); certify
-  physics claims in x64 (`hunt fp32, certify x64`).
+  ~conservation level for short dynamics (memory-bandwidth-bound). Over long
+  real-time runs (Hamiltonian / Kibble–Zurek-length) fp32 phase error
+  accumulates beyond what step-wise conservation reveals, so time-resolved
+  dynamics claims are certified in x64 (`hunt fp32, certify x64`).
 - Identification of knot topology in a strongly radiating state is
   unreliable for ANY tracer; quench first (a few hundred arrested-flow
   steps cannot create knotting — the area form protects, never ties),
