@@ -115,7 +115,16 @@ class ProviderExecutor:
                        timeout=self.run_timeout)
         for line in out.splitlines():
             if line.startswith(RESULT_PREFIX):
-                return json.loads(line[len(RESULT_PREFIX):])
+                payload = line[len(RESULT_PREFIX):]
+                # The worker runs on an untrusted remote box and its stdout can be
+                # truncated or interleaved; a malformed result line is this one
+                # config's failure, not grounds to abort the whole campaign.
+                try:
+                    return json.loads(payload)
+                except json.JSONDecodeError as e:
+                    return {"run": config.run_name(), "result": None,
+                            "skipped": False,
+                            "error": f"malformed result line ({e}): {payload[:200]}"}
         return {"run": config.run_name(), "result": None, "skipped": False,
                 "error": f"rc={rc}: {out[-200:]}"}
 
@@ -132,7 +141,17 @@ class ProviderExecutor:
 
         Teardown is the Provider's leak-proof `rent()` invariant -- it fires on
         every exit, including the failover `continue` and any exception here.
+
+        `admission` is enforced structurally here -- by the Provider's
+        `offers()`/`rent()` host gates (the `HostSpec`), not a campaign
+        `Admission`. A non-None campaign Admission would be silently ignored, so
+        reject it rather than letting a caller believe it is applied.
         """
+        if admission is not None:
+            raise NotImplementedError(
+                "ProviderExecutor enforces host admission via the Provider's "
+                "offers()/rent() gates (HostSpec), not a campaign Admission; "
+                "pass admission=None")
         configs = list(configs)
         if not configs:
             return []

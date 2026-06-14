@@ -55,13 +55,15 @@ class FakeProvider:
             self.live.discard(iid)            # leak-proof teardown
 
 
-def _fake_ssh_factory(*, ready=True, run_rc=0):
+def _fake_ssh_factory(*, ready=True, run_rc=0, worker_out=None):
     """Build a fake _ssh: the 'import jax_solitons' readiness probe and the
     worker invocation both routed by inspecting the command string."""
     def fake_ssh(key, host, port, cmd, timeout=120):
         if "import jax_solitons" in cmd:
             return (0, "") if ready else (1, "ModuleNotFoundError")
         if "campaign.worker" in cmd:
+            if worker_out is not None:
+                return (run_rc, worker_out)
             rec = {"run": "r", "result": {"ok": True}, "skipped": False}
             return (run_rc, RESULT_PREFIX + json.dumps(rec) + "\n")
         return (0, "")
@@ -109,6 +111,32 @@ def test_engine_never_ready_fails_over_then_raises(patched):
         ex.run(CONFIGS)
     assert prov.rented == ["a", "b"]           # tried both, both timed out ready
     assert prov.live == set()                  # neither leaked
+
+
+def test_malformed_result_line_is_error_record_not_crash(patched, monkeypatch):
+    """A truncated/garbled worker result line is one config's error, not a
+    campaign-aborting JSONDecodeError."""
+    monkeypatch.setattr(pe.time, "sleep", lambda s: None)
+    monkeypatch.setattr(pe, "_scp_down", lambda *a, **k: (0, ""))
+    monkeypatch.setattr(pe, "_ssh", _fake_ssh_factory(
+        ready=True, worker_out=RESULT_PREFIX + '{"run": "r", "result": '))  # truncated
+    prov = FakeProvider([_offer("a")])
+    ex = ProviderExecutor(prov, "pkg.mod:fn", LAUNCH, host_spec=SPEC,
+                          ready_timeout=1)
+    results = ex.run(CONFIGS)
+    assert len(results) == 2
+    assert all("malformed result line" in r["error"] for r in results)
+    assert prov.live == set()                   # still torn down
+
+
+def test_non_none_admission_rejected(patched):
+    """ProviderExecutor enforces admission via the Provider's host gates; a
+    campaign Admission would be silently ignored, so reject it loudly."""
+    patched(ready=True)
+    ex = ProviderExecutor(FakeProvider([_offer("a")]), "pkg.mod:fn", LAUNCH,
+                          host_spec=SPEC)
+    with pytest.raises(NotImplementedError, match="admission"):
+        ex.run(CONFIGS, admission=object())
 
 
 def test_no_offers_raises(patched):

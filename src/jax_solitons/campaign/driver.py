@@ -83,7 +83,11 @@ def run_campaign(
     def task_for(config):
         # Each task runs the unit of work on whichever worker picks it up; the
         # register/skip/resume/finish logic lives in execute_config (shared with
-        # the remote workers in campaign.remote).
-        return lambda: execute_config(config, run_fn, registry=registry, sink=sink)
+        # the remote workers in campaign.remote). The thunk discards
+        # execute_config's return value to honor Executor.run's Callable[[], None]
+        # contract -- executors must not depend on a task's return.
+        def task() -> None:
+            execute_config(config, run_fn, registry=registry, sink=sink)
+        return task
 
     executor.run((task_for(c) for c in configs), admission)   # lazy generator

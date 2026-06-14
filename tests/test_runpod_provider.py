@@ -115,6 +115,20 @@ def test_min_cuda_gate_from_spec(mk):
     assert p._allowed_cuda() == ["12.4", "12.5", "12.6", "12.7", "12.8", "13.0"]
 
 
+def test_offers_refreshes_gates_across_specs(mk):
+    """A reused provider tracks the most recent spec's create-time gates; a
+    constructor override pins them against refresh."""
+    p = mk(FakeRunPod())
+    p.offers(HostSpec(gpu_name="RTX_4090", max_dph=1.0, min_cuda=12.4))
+    assert p._min_cuda == 12.4
+    p.offers(HostSpec(gpu_name="RTX_4090", max_dph=1.0, min_cuda=12.8))
+    assert p._min_cuda == 12.8                          # refreshed, not stuck at 12.4
+
+    pinned = mk(FakeRunPod(), min_cuda=11.8)
+    pinned.offers(HostSpec(gpu_name="RTX_4090", max_dph=1.0, min_cuda=12.8))
+    assert pinned._min_cuda == 11.8                     # constructor wins, unchanged
+
+
 def _offer():
     return Offer(id="NVIDIA GeForce RTX 4090", dph=0.34, gpu_name="RTX 4090",
                  num_gpus=1, reliability=float("nan"), inet_down_mbps=float("nan"),

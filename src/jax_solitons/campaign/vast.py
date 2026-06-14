@@ -209,9 +209,15 @@ class VastProvider:
                disk: float = 40.0, label: str = "jax-solitons",
                runtype: str = "ssh") -> int:
         """Create an instance from an offer; returns the instance id."""
+        try:
+            ask_id = int(offer_id)
+        except (TypeError, ValueError):
+            raise VastError(
+                f"create: {offer_id!r} is not a Vast ask id -- an Offer from "
+                f"another Provider cannot be rented through VastProvider")
         blob = {"client_id": "me", "image": image, "env": {}, "disk": disk,
                 "label": label, "onstart": onstart_cmd, "runtype": runtype}
-        res = _req("PUT", f"{V0}/asks/{int(offer_id)}/", self.key, blob)
+        res = _req("PUT", f"{V0}/asks/{ask_id}/", self.key, blob)
         new_id = res.get("new_contract") or res.get("id")
         if not new_id:
             raise VastError(f"create returned no instance id: {res}")
@@ -287,18 +293,28 @@ class VastProvider:
         t0 = time.monotonic()
         instance_id = self.create(offer.id, image=launch.image,
                                    onstart_cmd=launch.onstart, disk=launch.disk_gb)
-        self._log("rented", offer_id=offer.id, instance_id=instance_id,
-                  gpu=offer.gpu_name, dph=offer.dph, reliability=offer.reliability,
+        self._log("rented", provider=self.name, offer_id=offer.id,
+                  instance_id=instance_id, gpu=offer.gpu_name, dph=offer.dph,
+                  reliability=offer.reliability,
                   geo=offer.geolocation.strip(", "))
         outcome, reason = "ok", ""
         try:
             inst = self.wait_running(instance_id, timeout_s=timeout_s)
-            self._log("running", offer_id=offer.id, instance_id=instance_id,
+            # The contract is a reachable host: a "running" instance whose status
+            # payload still lacks SSH coordinates is unusable. Fail it as a probe
+            # failure so the executor fails over, rather than yielding a host that
+            # silently breaks every downstream SSH call (empty host / port 0).
+            ssh_host = str(inst.raw.get("ssh_host") or "")
+            ssh_port = int(inst.raw.get("ssh_port") or 0)
+            if not ssh_host or not ssh_port:
+                raise HostProbeFailed(
+                    f"instance {instance_id} running but SSH coordinates missing "
+                    f"(host={ssh_host!r}, port={ssh_port})")
+            self._log("running", provider=self.name, offer_id=offer.id,
+                      instance_id=instance_id,
                       provision_s=round(time.monotonic() - t0, 1))
             yield RentedHost(
-                id=str(instance_id),
-                ssh_host=str(inst.raw.get("ssh_host") or ""),
-                ssh_port=int(inst.raw.get("ssh_port") or 0),
+                id=str(instance_id), ssh_host=ssh_host, ssh_port=ssh_port,
                 offer=offer, raw=inst.raw)
         except HostProbeFailed as e:
             outcome, reason = "host_failed", str(e)
@@ -327,7 +343,8 @@ class VastProvider:
                 verify = "present" if present else "gone"
             except Exception as e:
                 verify = f"unverified: {e}"
-            self._log("destroyed", offer_id=offer.id, instance_id=instance_id,
+            self._log("destroyed", provider=self.name, offer_id=offer.id,
+                      instance_id=instance_id,
                       outcome=outcome, reason=reason[:200],
                       billed_s=round(billed_s, 1),
                       est_cost_usd=round(offer.dph * billed_s / 3600, 4),

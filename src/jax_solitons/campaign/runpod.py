@@ -124,10 +124,13 @@ class RunPodProvider:
         self.interruptible = interruptible
         self.data_center_ids = data_center_ids
         self.volume_gb = volume_gb
-        # Create-time admission: explicit constructor args win; else filled from
-        # the HostSpec the next offers() call sees (single-spec-per-provider).
+        # Create-time admission: explicit constructor args win and are pinned;
+        # otherwise each offers() call refreshes them from the HostSpec it sees,
+        # so reusing the provider with a different spec sends the current gates.
         self._min_cuda = min_cuda
         self._min_inet = min_download_mbps
+        self._cuda_pinned = min_cuda is not None
+        self._inet_pinned = min_download_mbps is not None
 
     def _log(self, event: str, **fields) -> None:
         if self.ledger is not None:
@@ -148,10 +151,11 @@ class RunPodProvider:
         catalog, so an Offer is a (type, cloud-tier) with `id` = the gpuTypeId.
         Per-host reliability/inet aren't in the catalog -> NaN (unknown); they
         are enforced at rent via RunPod's create-time admission instead."""
-        # Remember the spec's create-time gates for rent() (constructor wins).
-        if self._min_cuda is None:
+        # Refresh the create-time gates from this spec unless the constructor
+        # pinned them (so a reused provider tracks the most recent spec).
+        if not self._cuda_pinned:
             self._min_cuda = spec.min_cuda
-        if self._min_inet is None:
+        if not self._inet_pinned:
             self._min_inet = spec.min_inet_mbps
         want = spec.gpu_name.replace("_", " ").lower()
         q = ("query { gpuTypes { id displayName memoryInGb "

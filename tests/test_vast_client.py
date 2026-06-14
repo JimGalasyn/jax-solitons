@@ -28,10 +28,12 @@ class FakeVast:
     """Scriptable replacement for vast._req, routing by (method, url)."""
 
     def __init__(self, *, start_status="running", status_msg="",
-                 destroy_fail=False, destroy_noop=False):
+                 destroy_fail=False, destroy_noop=False,
+                 ssh_host="1.2.3.4", ssh_port=22000):
         self.inst = {}                       # id -> instance dict
         self.start_status, self.status_msg = start_status, status_msg
         self.destroy_fail, self.destroy_noop = destroy_fail, destroy_noop
+        self.ssh_host, self.ssh_port = ssh_host, ssh_port
         self.offers = [
             dict(id=111, dph_total=0.15, gpu_name="RTX 3090", num_gpus=1,
                  reliability2=0.99, inet_down=900, cuda_max_good=12.5, geolocation=", CA"),
@@ -44,7 +46,8 @@ class FakeVast:
             return {"offers": self.offers}
         if method == "PUT" and "/asks/" in url:
             self.inst[9001] = {"actual_status": self.start_status,
-                               "dph_total": 0.15, "status_msg": self.status_msg}
+                               "dph_total": 0.15, "status_msg": self.status_msg,
+                               "ssh_host": self.ssh_host, "ssh_port": self.ssh_port}
             return {"new_contract": 9001}
         if method == "GET" and "/api/v1/instances/" in url:
             return {"instances": [{"id": i, **d} for i, d in self.inst.items()]}
@@ -85,12 +88,35 @@ def test_rent_happy_path_destroys_and_verifies_gone(mk, tmp_path):
     c = mk(FakeVast(start_status="running"), ledger=led)
     with c.rent(OFFER, LAUNCH, timeout_s=5) as host:
         assert isinstance(host, RentedHost) and host.id == "9001"
+        assert host.ssh_host == "1.2.3.4" and host.ssh_port == 22000   # reachable
         assert host.offer is OFFER               # cost/geo stay attached
     evs = led.events()
     assert {e["event"] for e in evs} == {"rented", "running", "destroyed"}
+    assert all(e["provider"] == "vast" for e in evs)   # cross-provider attribution
     d = next(e for e in evs if e["event"] == "destroyed")
     assert d["destroyed"] is True and d["verify"] == "gone"
     assert "est_cost_usd" in d
+
+
+def test_rent_missing_ssh_coords_fails_over_and_destroys(mk, tmp_path):
+    """A 'running' instance with no SSH coordinates is unusable -> HostProbeFailed
+    (so the executor fails over), and teardown still fires + verifies gone."""
+    led = VastLedger(tmp_path / "l.jsonl")
+    c = mk(FakeVast(start_status="running", ssh_host="", ssh_port=0), ledger=led)
+    with pytest.raises(HostProbeFailed):
+        with c.rent(OFFER, LAUNCH, timeout_s=5):
+            pass
+    evs = led.events()
+    d = next(e for e in evs if e["event"] == "destroyed")
+    assert d["outcome"] == "host_failed" and d["verify"] == "gone"
+
+
+def test_create_rejects_non_int_offer_id_as_vast_error(mk):
+    """A foreign Provider's Offer id (non-int) yields a clear VastError, not a
+    bare ValueError from int()."""
+    c = mk(FakeVast())
+    with pytest.raises(VastError, match="not a Vast ask id"):
+        c.create("NVIDIA GeForce RTX 4090", image="img", onstart_cmd="echo")
 
 
 def test_rent_raises_loudly_on_failed_destroy(mk, tmp_path):

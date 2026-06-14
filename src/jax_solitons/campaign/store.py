@@ -9,10 +9,11 @@ can't give: a single source of truth across clouds -- global `is_complete`
 streamed event ledger from. No new seam; a second backend of the existing A/B/C
 protocols (CAMPAIGN.md's "RunRegistry on a shared object store").
 
-Design note: every record is its **own blob** (`events/00000007.json`,
+Design note: every record is its **own blob** (`events/<time_ns>-<uuid>.json`,
 `_manifest/<run>.json`), never an appended-to file. Object stores have no atomic
 append, and one-blob-per-record means concurrent writers -- the whole point of a
-shared store -- never race on a single key. Reading a stream is list + sort.
+shared store -- never race on a single key (the key carries a UUID so even
+same-tick writers don't collide). Reading a stream is list + sort.
 
 `boto3` is an optional dependency, imported only by `S3BlobStore`.
 """
@@ -21,6 +22,8 @@ from __future__ import annotations
 
 import io
 import json
+import time
+import uuid
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -196,27 +199,29 @@ class ObjectStoreEventSink:
     def __init__(self, store: BlobStore, base: str = "runs"):
         self.store = store
         self.base = base.rstrip("/")
-        self._seq: dict[str, int] = {}
 
-    def _next_seq(self, name: str) -> int:
-        if name not in self._seq:                    # seed from store (resume-safe)
-            self._seq[name] = len(self.store.list(f"{self.base}/{name}/events/"))
-        n = self._seq[name]
-        self._seq[name] = n + 1
-        return n
+    @staticmethod
+    def _blob_key() -> str:
+        """A sortable, collision-resistant per-record key.
+
+        A shared sequence counter (or `len(list(...))`) races: two writers for
+        the same run can pick the same number and silently overwrite each other.
+        A nanosecond timestamp keeps blobs in emission order under a lexical sort
+        (zero-padded to fixed width), and a UUID suffix makes a same-tick
+        collision between writers effectively impossible."""
+        return f"{time.time_ns():020d}-{uuid.uuid4().hex}"
 
     def emit(self, handle: RunHandle, record: dict) -> None:
-        n = self._next_seq(handle.name)
-        self.store.put(f"{self.base}/{handle.name}/events/{n:08d}.json",
-                       json.dumps(record, sort_keys=True).encode())
+        self.store.put(
+            f"{self.base}/{handle.name}/events/{self._blob_key()}.json",
+            json.dumps(record, sort_keys=True).encode())
 
     def trigger(self, handle: RunHandle, state: State, reason: str) -> None:
-        existing = self.store.list(f"{self.base}/{handle.name}/triggered/")
         buf = io.BytesIO()
         np.savez_compressed(buf, __reason__=reason,
                             **{k: np.asarray(v) for k, v in state.items()})
         self.store.put(
-            f"{self.base}/{handle.name}/triggered/{len(existing):04d}.npz",
+            f"{self.base}/{handle.name}/triggered/{self._blob_key()}.npz",
             buf.getvalue())
 
     def close(self, handle: RunHandle) -> None:
