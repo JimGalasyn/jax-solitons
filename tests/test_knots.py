@@ -12,7 +12,23 @@ from jax_solitons.knots import (
     identify_knot,
     torus_knot,
     trace_implicit_curve,
+    with_time_limit,
 )
+
+
+def test_with_time_limit_returns_fn_result():
+    assert with_time_limit(10, lambda: 42, "default") == 42
+
+
+def test_identify_knot_short_curve_is_trivially_unknot():
+    assert identify_knot(np.zeros((2, 3)))["determinant"] == 1   # <4 pts
+
+
+def test_identify_knot_unrecognised_determinant_labels_it():
+    pytest.importorskip("pyknotid")
+    info = identify_knot(torus_knot(2, 11))                       # det 11, not in ladder
+    assert info["determinant"] == 11
+    assert "unrecognised" in info["carrier"]
 
 
 def test_identify_torus_knot_determinants():
