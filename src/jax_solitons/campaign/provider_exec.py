@@ -44,21 +44,29 @@ def _ssh(key: str, host: str, port: int, cmd: str, timeout: float = 120):  # pra
     """Run one command on the box; returns (rc, combined stdout+stderr).
 
     Live subprocess to a rented host; tests monkeypatch this, so its body isn't
-    unit-covered."""
-    r = subprocess.run(
-        ["ssh", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
-         "-o", "ConnectTimeout=15", "-p", str(port), f"root@{host}", cmd],
-        capture_output=True, text=True, timeout=timeout)
-    return r.returncode, r.stdout + r.stderr
+    unit-covered. A `TimeoutExpired` is returned AS a non-zero (rc, out) so the
+    caller's normal rc!=0 handling applies (engine-ready retry, per-config error
+    record) instead of the exception aborting the whole campaign."""
+    try:
+        r = subprocess.run(
+            ["ssh", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
+             "-o", "ConnectTimeout=15", "-p", str(port), f"root@{host}", cmd],
+            capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout + r.stderr
+    except subprocess.TimeoutExpired as e:
+        return 124, f"ssh timeout after {timeout}s: {e}"
 
 
 def _scp_down(key: str, host: str, port: int, remote: str, local: str,
               timeout: float = 600):  # pragma: no cover  (live subprocess)
-    r = subprocess.run(
-        ["scp", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
-         "-P", str(port), "-r", f"root@{host}:{remote}", local],
-        capture_output=True, text=True, timeout=timeout)
-    return r.returncode, r.stdout + r.stderr
+    try:
+        r = subprocess.run(
+            ["scp", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
+             "-P", str(port), "-r", f"root@{host}:{remote}", local],
+            capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout + r.stderr
+    except subprocess.TimeoutExpired as e:
+        return 124, f"scp timeout after {timeout}s: {e}"  # best-effort sync; don't abort
 
 
 class ProviderExecutor:

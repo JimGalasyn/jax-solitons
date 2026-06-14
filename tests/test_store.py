@@ -87,6 +87,23 @@ def test_shared_store_seen_by_a_second_registry():
     assert b.is_complete(b.register(CFG))              # sees A's DONE
 
 
+def test_read_helpers_skip_vanished_blobs():
+    """list()->get() isn't atomic; a key whose blob is gone (eventual
+    consistency / a concurrent prune) is skipped, not a TypeError."""
+    class Flaky(MemoryBlobStore):
+        def list(self, prefix):                      # advertise a ghost key
+            return super().list(prefix) + [f"{prefix}ghost.json"]
+
+    store = Flaky()
+    reg = ObjectStoreRunRegistry(store)
+    sink = ObjectStoreEventSink(store)
+    h = reg.register(CFG)
+    sink.emit(h, {"step": 0})
+    assert sink.events(h.name) == [{"step": 0}]      # ghost event skipped, no crash
+    assert reg.manifest() == [
+        {"run": h.name, "config": json.loads(CFG.to_json())}]  # ghost manifest skipped
+
+
 def test_run_campaign_over_object_store():
     """Drop-in: drive the real pipeline through run_campaign over the object
     store; the registered/streamed/finished artifacts all land in the store."""

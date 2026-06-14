@@ -146,6 +146,21 @@ def _load_checkpoint(data: bytes) -> tuple[State, int]:
     return state, step
 
 
+def _read_json_blobs(store: "BlobStore", keys: list[str]) -> list[dict]:
+    """Read + JSON-parse each key, skipping any whose blob is gone.
+
+    `list()` then `get()` is not atomic: on an eventually-consistent backend, or
+    if a key is pruned between the two calls, `get()` can return None. Skip the
+    vanished row rather than crash the whole ledger/manifest read on a TypeError.
+    """
+    out = []
+    for k in keys:
+        blob = store.get(k)
+        if blob is not None:
+            out.append(json.loads(blob))
+    return out
+
+
 # ----------------------------------------------------------------- A + B (P4) --
 class ObjectStoreRunRegistry:
     """`RunRegistry` over a `BlobStore` -- config-hashed runs + full-state
@@ -186,8 +201,8 @@ class ObjectStoreRunRegistry:
 
     def manifest(self) -> list[dict]:
         """Every registered run (one manifest blob each)."""
-        return [json.loads(self.store.get(k))
-                for k in sorted(self.store.list(f"{self.base}/_manifest/"))]
+        return _read_json_blobs(
+            self.store, sorted(self.store.list(f"{self.base}/_manifest/")))
 
 
 # -------------------------------------------------------------- C (P6, P7) --
@@ -231,4 +246,4 @@ class ObjectStoreEventSink:
         """The streamed ledger for a run, in order -- read it any time, from any
         process pointed at the store (the live cross-provider view)."""
         keys = sorted(self.store.list(f"{self.base}/{name}/events/"))
-        return [json.loads(self.store.get(k)) for k in keys]
+        return _read_json_blobs(self.store, keys)
