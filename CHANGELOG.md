@@ -37,7 +37,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **`campaign.multi`** — `run_multi` / `split_configs` drive one campaign across
   several executors at once (partition-and-merge). Content-addressed run identity
   (`config_hash`) makes the cross-provider harvest collision-free; a failing
-  provider is isolated.
+  provider is isolated. `stream_multi` yields each provider's slice as it
+  completes (a fast cloud isn't gated on the slowest); `run_multi(on_result=...)`
+  observes them live.
+- **Shared object-store backend** (`campaign.store`) — `ObjectStoreRunRegistry`
+  (A/B) and `ObjectStoreEventSink` (C) over a minimal `BlobStore` (`MemoryBlobStore`
+  for tests/single-process; `S3BlobStore` for S3/R2/GCS/MinIO, `boto3` optional).
+  One store shared by every executor gives global `is_complete` (dedup +
+  cross-provider/-restart resume) and one place to read results and the streamed
+  ledger. One blob per record (no append) so concurrent writers never contend.
 
 ### Changed
 - `VastClient` → **`VastProvider`**, now implementing the `Provider` Protocol:

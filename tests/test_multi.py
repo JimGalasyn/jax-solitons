@@ -3,7 +3,15 @@ failure isolation, and duplicate detection -- all with fake executors, no clouds
 
 import pytest
 
-from jax_solitons.campaign.multi import CampaignReport, run_multi, split_configs
+import threading
+import time
+
+from jax_solitons.campaign.multi import (
+    CampaignReport,
+    run_multi,
+    split_configs,
+    stream_multi,
+)
 from jax_solitons.runs import RunConfig
 
 
@@ -80,3 +88,31 @@ def test_run_multi_empty_is_noop():
     report = run_multi([])
     assert report.results == {} and report.by_provider == []
     assert "0 runs" in report.summary()
+
+
+class SlowExec(FakeExec):
+    """Returns after `delay` seconds, so completion order is controllable."""
+
+    def __init__(self, name, delay):
+        super().__init__(name)
+        self.delay = delay
+
+    def run(self, configs, *, admission=None):
+        time.sleep(self.delay)
+        return super().run(configs)
+
+
+def test_stream_multi_yields_in_completion_order():
+    fast, slow = SlowExec("fast", 0.05), SlowExec("slow", 0.30)
+    asg = [(slow, _cfgs(2)), (fast, _cfgs(2))]
+    order = [pr.provider for pr in stream_multi(asg)]
+    assert order == ["fast", "slow"]          # fast cloud's slice lands first
+
+
+def test_run_multi_on_result_called_live():
+    e1, e2 = FakeExec("modal"), FakeExec("vast")
+    seen = []
+    report = run_multi(split_configs(_cfgs(4), [e1, e2]),
+                       on_result=lambda pr: seen.append(pr.provider))
+    assert set(seen) == {"modal", "vast"}     # callback fired per provider
+    assert report.ok and len(report.results) == 4   # and the final report still merges

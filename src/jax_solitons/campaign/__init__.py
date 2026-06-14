@@ -39,9 +39,21 @@ from jax_solitons.campaign.reference import (
     ProbeAdmission,
     SkyPilotExecutor,
 )
-from jax_solitons.campaign.multi import CampaignReport, run_multi, split_configs
+from jax_solitons.campaign.multi import (
+    CampaignReport,
+    run_multi,
+    split_configs,
+    stream_multi,
+)
 from jax_solitons.campaign.provider_exec import ProviderExecutor
 from jax_solitons.campaign.remote import load_run_fn, run_one
+from jax_solitons.campaign.store import (
+    BlobStore,
+    MemoryBlobStore,
+    ObjectStoreEventSink,
+    ObjectStoreRunRegistry,
+    S3BlobStore,
+)
 from jax_solitons.campaign.runpod import RunPodProvider
 from jax_solitons.campaign.vast import VastLedger, VastProvider
 
@@ -60,8 +72,11 @@ __all__ = [
     "FileRunRegistry", "JsonlEventSink", "ProbeAdmission",
     "LocalExecutor", "SkyPilotExecutor", "ProviderExecutor",
     "VastProvider", "VastLedger", "RunPodProvider",
+    # shared object-store backend (A/B/C over a BlobStore)
+    "BlobStore", "MemoryBlobStore", "S3BlobStore",
+    "ObjectStoreRunRegistry", "ObjectStoreEventSink",
     # driver + remote-worker core
     "run_campaign", "execute_config", "run_one", "load_run_fn",
     # multi-provider partition-and-merge
-    "run_multi", "split_configs", "CampaignReport",
+    "run_multi", "stream_multi", "split_configs", "CampaignReport",
 ]

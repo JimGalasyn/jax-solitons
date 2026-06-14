@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import dataclasses
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 
 from jax_solitons.runs import RunConfig
 
@@ -112,25 +112,24 @@ def split_configs(configs: Iterable[RunConfig], executors: Sequence[object],
     return list(zip(executors, buckets))
 
 
-def run_multi(assignments: Iterable[Assignment], *,
-              max_workers: int | None = None) -> CampaignReport:
-    """Run each executor's slice concurrently and merge into one harvest.
+def _name(ex) -> str:
+    return getattr(ex, "name", type(ex).__name__)
 
-    Each executor runs in its own thread (its `.run` blocks on its cloud and
-    does its own internal fan-out). A provider that raises is isolated: its
-    failure is recorded and the other providers' results are still harvested --
-    one cloud going down never loses another's work.
+
+def stream_multi(assignments: Iterable[Assignment], *,
+                 max_workers: int | None = None) -> "Iterator[ProviderRun]":
+    """Yield each executor's `ProviderRun` **as it completes** (completion order).
+
+    The streaming primitive: a fast cloud's slice is handed back the instant it
+    finishes, not gated on the slowest executor. Each executor runs in its own
+    thread (its `.run` blocks on its cloud and does its own internal fan-out); a
+    provider that raises yields a `ProviderRun` carrying the error rather than
+    propagating -- one cloud going down never stops the others' results landing.
+    Records are annotated with the producing `provider`.
     """
     assignments = [(ex, list(cfgs)) for ex, cfgs in assignments if cfgs]
-    results: dict[str, dict] = {}
-    duplicates: dict[str, list[str]] = {}
-    reports: list[ProviderRun] = []
     if not assignments:
-        return CampaignReport(results, reports, duplicates)
-
-    def _name(ex) -> str:
-        return getattr(ex, "name", type(ex).__name__)
-
+        return
     with cf.ThreadPoolExecutor(max_workers=max_workers or len(assignments)) as pool:
         futs = {pool.submit(ex.run, cfgs): (ex, cfgs) for ex, cfgs in assignments}
         for fut in cf.as_completed(futs):
@@ -139,14 +138,34 @@ def run_multi(assignments: Iterable[Assignment], *,
             try:
                 records = fut.result()
             except Exception as e:  # noqa: BLE001 -- isolate one cloud's failure
-                reports.append(ProviderRun(name, len(cfgs),
-                                           error=f"{type(e).__name__}: {e}"))
+                yield ProviderRun(name, len(cfgs), error=f"{type(e).__name__}: {e}")
                 continue
-            annotated = [{**r, "provider": name} for r in records]
-            for r in annotated:
-                run = r.get("run")
-                if run in results:                      # non-disjoint partition
-                    duplicates.setdefault(run, [results[run]["provider"]]).append(name)
-                results[run] = r
-            reports.append(ProviderRun(name, len(cfgs), records=annotated))
+            yield ProviderRun(name, len(cfgs),
+                              records=[{**r, "provider": name} for r in records])
+
+
+def run_multi(assignments: Iterable[Assignment], *,
+              max_workers: int | None = None,
+              on_result: "Callable[[ProviderRun], None] | None" = None,
+              ) -> CampaignReport:
+    """Run each executor's slice concurrently and merge into one harvest.
+
+    Drains `stream_multi`, so providers' slices are merged in completion order;
+    pass `on_result` to observe each `ProviderRun` live as it lands (progress
+    printout, incremental write-out) without giving up the final merged report.
+    A provider that raises is isolated -- recorded, others still harvested.
+    """
+    results: dict[str, dict] = {}
+    duplicates: dict[str, list[str]] = {}
+    reports: list[ProviderRun] = []
+    for pr in stream_multi(assignments, max_workers=max_workers):
+        if on_result is not None:
+            on_result(pr)
+        reports.append(pr)
+        for r in pr.records:
+            run = r.get("run")
+            if run in results:                          # non-disjoint partition
+                duplicates.setdefault(run, [results[run]["provider"]]).append(
+                    pr.provider)
+            results[run] = r
     return CampaignReport(results, reports, duplicates)

@@ -149,11 +149,25 @@ campaign over several executors at once -- `split_configs` partitions the work
 concurrently, and the result records merge into one harvest. This is *sensible*
 because run identity is content-addressed (`config_hash`): a record names its
 config regardless of which cloud produced it, so the merge can't collide, and a
-failed provider is isolated (its slice errors; the rest still harvest). It
-assumes a **disjoint** partition -- `is_complete`/resume are per-executor here.
-Global dedup, cross-provider resume, and a single artifact store are the job of
-a shared `RunRegistry` backend (an object-store impl of A/B) -- a second
-backend, not a new seam -- which is the documented next step.
+failed provider is isolated (its slice errors; the rest still harvest).
+`stream_multi` yields each provider's slice the instant it completes (a fast
+cloud isn't gated on the slowest); `run_multi(on_result=...)` observes them live.
+The partition is assumed **disjoint** -- `is_complete`/resume are per-executor
+*when each writes its own local store*.
+
+**Shared object-store backend (`campaign.store`).** Point every executor at one
+store and that caveat lifts: `ObjectStoreRunRegistry` (A/B) + `ObjectStoreEventSink`
+(C) implement the existing protocols over a minimal `BlobStore` (`MemoryBlobStore`;
+`S3BlobStore` for S3/R2/GCS/MinIO, `boto3` optional). One shared store is the
+single source of truth -- global `is_complete` (dedup + cross-provider and
+cross-restart resume) and one place to read both results and the *streamed* event
+ledger (`events(name)`), the real-time cross-provider view. Every record is its
+own blob (object stores have no atomic append), so concurrent writers -- the
+whole point -- never contend. A second backend of A/B/C, not a new seam. The
+remaining wiring (a rented box writing straight to the store needs scoped creds;
+the conservative path is the orchestrator holding the shared registry, checking
+`is_complete` before dispatch and writing results back) is the integration tier
+on top of this.
 
 ## The contract → DESIGN.md principles
 
