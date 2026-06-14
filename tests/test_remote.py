@@ -47,3 +47,13 @@ def test_run_one_executes_and_is_idempotent(tmp_path, monkeypatch):
     # Second call is the idempotent skip (already complete).
     again = run_one(CFG.to_json(), "x:y", str(tmp_path))
     assert again["skipped"] is True and again["result"] is None
+
+
+def test_run_one_enables_x64_for_float64(tmp_path, monkeypatch):
+    """A float64 config makes the worker enable jax x64 (else it'd silently run
+    in float32 on a fresh remote process)."""
+    import jax
+    monkeypatch.setattr(remote, "load_run_fn", lambda ref: _trivial_runfn)
+    cfg = RunConfig("faddeev_cp1", N=8, L=8.0, dtype="float64", params={"R": 2.0})
+    run_one(cfg.to_json(), "x:y", str(tmp_path))
+    assert jax.config.read("jax_enable_x64") is True

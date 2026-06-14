@@ -1,0 +1,17 @@
+# Coverage policy. The repo previously had none, so Codecov ran its strict
+# defaults (project: 0% drop tolerance; patch: ~base auto-target), which red any
+# feature PR that adds well-but-not-perfectly-covered code — e.g. cloud adapters
+# with live-I/O paths that can't run in CI. These thresholds keep the bar high
+# (90% on new code, <0.5% project drift) without failing on sub-0.1% noise.
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0.5%      # tolerate minor coverage drift from new code
+    patch:
+      default:
+        target: 90%          # new code must be well-covered (live-cloud glue is
+                             # pragma'd/omitted, so this reflects testable lines)
+
+comment: false

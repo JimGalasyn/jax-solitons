@@ -96,6 +96,20 @@ def test_run_multi_empty_is_noop():
     assert "0 runs" in report.summary()
 
 
+def test_split_requires_an_executor():
+    with pytest.raises(ValueError, match="at least one executor"):
+        split_configs(_cfgs(2), [])
+
+
+def test_summary_reports_partial_errors_and_duplicates():
+    (c,) = _cfgs(1)
+    good, bad = FakeExec("modal"), FakeExec("vast", fail=True)
+    s = run_multi([(good, [c]), (bad, [c])]).summary()
+    assert "PARTIAL" in s and "ERROR" in s          # failed-provider summary branch
+    dup = run_multi([(FakeExec("modal"), [c]), (FakeExec("runpod"), [c])]).summary()
+    assert "DUPLICATE" in dup                        # non-disjoint summary branch
+
+
 class SlowExec(FakeExec):
     """Returns after `delay` seconds, so completion order is controllable."""
 
