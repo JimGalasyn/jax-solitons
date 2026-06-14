@@ -34,23 +34,42 @@ _MOUNT = "/campaign"
 DEFAULT_VOLUME = "jax-solitons-campaign"
 
 
-def default_image() -> "modal.Image":
-    """A debian image with git + jax (CUDA 12) + the public jax-solitons engine.
+def default_image(ref: str = "main") -> "modal.Image":
+    """A debian image with git + jax (CUDA 12) + the jax-solitons engine.
 
-    The same recipe validated live on 2026-06-14 (note: `debian_slim` has no git,
-    which the VCS install needs). Pass your own `image` to pin a commit, add deps,
-    or install a private fork.
-
-    The image Python matches the LOCAL interpreter: a `serialized=True` worker is
-    cloudpickled here and unpickled on the box, so the two Pythons must agree.
+    `ref` pins the git ref installed (branch/tag/commit). It MUST contain the
+    code the worker runs -- `campaign.remote.run_one` and the `run_fn_ref` -- so
+    while a feature branch is unmerged, install from it (e.g.
+    ``default_image("provider-seam-f")``); a release pins a tag. (`debian_slim`
+    has no git, which the VCS install needs.) Pass a full `image` to ModalExecutor
+    to add deps or install a private fork instead.
     """
     py = f"{sys.version_info.major}.{sys.version_info.minor}"
     return (
         modal.Image.debian_slim(python_version=py)
         .apt_install("git")
         .pip_install("jax[cuda12]",
-                     "git+https://github.com/JimGalasyn/jax-solitons")
+                     f"git+https://github.com/JimGalasyn/jax-solitons@{ref}")
     )
+
+
+def _modal_worker(config_json: str, run_fn_ref: str, work_dir: str,
+                  volume_name: str) -> dict:
+    """The function Modal runs in-container (referenced by name, not pickled, so
+    the image's own jax-solitons provides it). Reload the Volume to see prior
+    checkpoints (resume/skip), run the shared unit, commit to persist artifacts.
+    """
+    vol = modal.Volume.from_name(volume_name)
+    try:
+        vol.reload()
+    except Exception:
+        pass
+    out = run_one(config_json, run_fn_ref, work_dir)
+    try:
+        vol.commit()                # persist checkpoints/events/triggers
+    except Exception as e:          # results still return; durability best-effort
+        out["volume_commit"] = f"failed: {e}"
+    return out
 
 
 class ModalExecutor:
@@ -69,31 +88,17 @@ class ModalExecutor:
                  timeout: int = 3600, retries: int = 2):
         self.run_fn_ref = run_fn_ref
         self.gpu = gpu
+        self.volume_name = volume_name
         self.work_dir = f"{_MOUNT}/{work_subdir}"
         self.volume = modal.Volume.from_name(volume_name, create_if_missing=True)
         self.app = modal.App(app_name)
-
-        work_dir = self.work_dir            # capture plain strings (serializable)
-        vol_name = volume_name
-
-        def _worker(config_json: str, run_fn_ref: str) -> dict:
-            # Runs inside the Modal container; the Volume is mounted at _MOUNT.
-            vol = modal.Volume.from_name(vol_name)
-            try:
-                vol.reload()                # see prior checkpoints (resume/skip)
-            except Exception:
-                pass
-            out = run_one(config_json, run_fn_ref, work_dir)
-            try:
-                vol.commit()                # persist checkpoints/events/triggers
-            except Exception as e:
-                out["volume_commit"] = f"failed: {e}"   # results still return
-            return out
-
+        # Module-level worker referenced by name (not cloudpickled): the image's
+        # own jax-solitons provides it, so there's no module-availability or
+        # Python-version-match fragility.
         self._worker = self.app.function(
             image=image or default_image(), gpu=gpu,
             volumes={_MOUNT: self.volume}, timeout=timeout,
-            retries=retries, serialized=True)(_worker)
+            retries=retries)(_modal_worker)
 
     def run(self, configs: Iterable[RunConfig], *, admission=None) -> list[dict]:
         """Fan `configs` out across Modal GPUs; return the small result records.
@@ -107,4 +112,6 @@ class ModalExecutor:
             return []
         with self.app.run():
             return list(self._worker.map(
-                cfg_jsons, kwargs={"run_fn_ref": self.run_fn_ref}))
+                cfg_jsons, kwargs={"run_fn_ref": self.run_fn_ref,
+                                   "work_dir": self.work_dir,
+                                   "volume_name": self.volume_name}))
