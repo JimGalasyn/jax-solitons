@@ -209,3 +209,86 @@ def torus_knot_hopfion_cp1(grid: BoxGrid, p: int, q: int, m: int = 1,
     Z1, Z2 = jnp.asarray(Z1), jnp.asarray(Z2)
     return jnp.stack([jnp.real(Z1), jnp.imag(Z1),
                       jnp.real(Z2), jnp.imag(Z2)]).astype(grid.dtype)
+
+
+# --- L_2 + L_3 coupled seed: a flux-threaded T(p,q) knot --------------------
+#
+# Composes the L_2 abelian-Higgs vortex with the L_3 torus-knot hopfion on a
+# single doublet psi = rho * e^{i chi} * zeta (Paper 16 reading A):
+#   - zeta (unit CP^1 direction) carries the Hopf texture -> n, twist-locked to
+#     Q_H = p*m (the L_3 sector, reusing the torus-knot machinery);
+#   - rho(d) = v tanh(d/xi) is the Higgs modulus -> 0 on the knot curve (a Higgs
+#     vortex core running ALONG the knotted tube), -> v in the bulk;
+#   - chi = alpha (the meridional angle) is the gauged overall phase: it winds
+#     2*pi around the core, i.e. ONE flux quantum threading the tube (the L_2
+#     vortex), with A circulating to make D psi -> 0 in the bulk.
+# The gauge A cancels only the COMMON phase chi (the flux); the RELATIVE phase
+# (the n-texture) survives as Skyrme energy -- exactly the L_2/L_3 split.
+
+
+def flux_threaded_knot_seed(grid: BoxGrid, p: int, q: int, m: int = 1,
+                            e: float = 1.0, v: float = 1.0,
+                            R: float | None = None, b: float | None = None,
+                            w: float | None = None, xi: float | None = None,
+                            S: int = 4000) -> jnp.ndarray:
+    """Coupled gauged Faddeev-Skyrme-Higgs state: a (7, N, N, N) array
+    ``(Re psi1, Im psi1, Re psi2, Im psi2, A_x, A_y, A_z)`` -- a Higgs flux tube
+    bent into a T(p, q) knot and wrapped by a Hopf texture of charge Q_H = p*m.
+    The seed of the L_2+L_3 coupled-model program (models.gauged_faddeev).
+
+    `xi` is the Higgs healing length (core radius); defaults to half the n-tube
+    radius w. Calibrates the longitudinal twist deterministically (one area-form
+    hopf_charge measurement on the pure direction field), as torus_knot_spinor."""
+    if np.gcd(p, q) != 1:
+        raise ValueError(f"T(p, q) needs gcd(p, q) = 1 (got p={p}, q={q})")
+    if e == 0:
+        raise ValueError("e (gauge coupling) must be nonzero (A_theta ~ 1/e).")
+    R, b, w = _knot_geometry(grid, R, b, w)
+    if xi is None:
+        xi = 0.5 * w
+    if xi <= 0:
+        raise ValueError(f"xi (Higgs healing length) must be positive (got {xi}).")
+
+    g, t, s_param = _torus_knot_curve(p, q, R, b, S)
+    r, u = _closed_rmf(g, t)
+    N = grid.N
+    X, Y, Z = (np.asarray(c, np.float64) for c in grid.coords())
+    P = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1)
+    d, k = cKDTree(g).query(P, k=1)
+    disp = P - g[k]
+    rk, uk = r[k], u[k]                                       # frame at nearest
+    alpha = np.arctan2(np.einsum("ij,ij->i", disp, uk),
+                       np.einsum("ij,ij->i", disp, rk))
+    s_at = s_param[k]
+
+    tt = np.clip(d / w, 0.0, 1.0)
+    lam = np.pi * (1.0 - tt ** 3 * (10.0 - 15.0 * tt + 6.0 * tt ** 2))  # pi->0
+
+    # twist calibration: Q_H[n] depends only on the direction zeta, so lock it
+    # on the smooth (modulus-free) field exactly as torus_knot_spinor does.
+    def _dir_n(ltw):
+        Phi = alpha + ltw * s_at
+        z1 = np.cos(lam / 2.0).reshape(N, N, N)
+        z2 = (np.sin(lam / 2.0) * np.exp(1j * Phi)).reshape(N, N, N)
+        return n_from_Z(jnp.asarray(z1), jnp.asarray(z2))
+    B = int(round(float(hopf_charge(_dir_n(0), grid))))
+    l = min((B - p * m, B + p * m), key=abs)
+
+    Phi = alpha + l * s_at                       # n-texture relative phase
+    rho = v * np.tanh(d / xi)                     # Higgs modulus, 0 at core
+    psi1 = rho * np.exp(1j * alpha) * np.cos(lam / 2.0)
+    psi2 = rho * np.exp(1j * (alpha + Phi)) * np.sin(lam / 2.0)
+
+    # gauge field: e A = gprof(d)/d * alpha_hat  (cancels d_i chi in the bulk),
+    # regular at the core (gprof ~ (d/xi)^2 -> A ~ d -> 0).
+    gprof = 1.0 - np.exp(-(d / xi) ** 2)
+    alpha_hat = (-np.sin(alpha)[:, None] * rk + np.cos(alpha)[:, None] * uk)
+    A = (gprof / (e * (d + 1e-12)))[:, None] * alpha_hat      # (M, 3)
+
+    state = np.stack([
+        psi1.real.reshape(N, N, N), psi1.imag.reshape(N, N, N),
+        psi2.real.reshape(N, N, N), psi2.imag.reshape(N, N, N),
+        A[:, 0].reshape(N, N, N), A[:, 1].reshape(N, N, N),
+        A[:, 2].reshape(N, N, N),
+    ])
+    return jnp.asarray(state, dtype=grid.dtype)
