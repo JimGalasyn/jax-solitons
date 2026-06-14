@@ -40,8 +40,11 @@ DEFAULT_KEY = "~/.ssh/vastai"
 DEFAULT_REMOTE_PYTHON = "/workspace/jaxenv/bin/python"
 
 
-def _ssh(key: str, host: str, port: int, cmd: str, timeout: float = 120):
-    """Run one command on the box; returns (rc, combined stdout+stderr)."""
+def _ssh(key: str, host: str, port: int, cmd: str, timeout: float = 120):  # pragma: no cover
+    """Run one command on the box; returns (rc, combined stdout+stderr).
+
+    Live subprocess to a rented host; tests monkeypatch this, so its body isn't
+    unit-covered."""
     r = subprocess.run(
         ["ssh", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
          "-o", "ConnectTimeout=15", "-p", str(port), f"root@{host}", cmd],
@@ -50,7 +53,7 @@ def _ssh(key: str, host: str, port: int, cmd: str, timeout: float = 120):
 
 
 def _scp_down(key: str, host: str, port: int, remote: str, local: str,
-              timeout: float = 600):
+              timeout: float = 600):  # pragma: no cover  (live subprocess)
     r = subprocess.run(
         ["scp", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
          "-P", str(port), "-r", f"root@{host}:{remote}", local],

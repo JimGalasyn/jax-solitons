@@ -96,8 +96,11 @@ def split_configs(configs: Iterable[RunConfig], executors: Sequence[object],
         for i, c in enumerate(configs):
             buckets[i % len(executors)].append(c)
     else:
-        if len(weights) != len(executors) or sum(weights) <= 0:
-            raise ValueError("weights must be one positive-sum value per executor")
+        if (len(weights) != len(executors) or sum(weights) <= 0
+                or any(w < 0 for w in weights)):
+            raise ValueError(
+                "weights must be one non-negative value per executor with "
+                "positive sum (a negative weight gives nonsense bucket counts)")
         total = sum(weights)
         # Largest-remainder apportionment so the counts sum to len(configs).
         exact = [w / total * len(configs) for w in weights]

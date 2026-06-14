@@ -3,7 +3,6 @@ failure isolation, and duplicate detection -- all with fake executors, no clouds
 
 import pytest
 
-import threading
 import time
 
 from jax_solitons.campaign.multi import (
@@ -40,6 +39,13 @@ def test_split_round_robin():
     e1, e2 = FakeExec("a"), FakeExec("b")
     asg = dict((ex, cfgs) for ex, cfgs in split_configs(_cfgs(5), [e1, e2]))
     assert len(asg[e1]) == 3 and len(asg[e2]) == 2        # 5 split 3/2
+
+
+def test_split_rejects_negative_weight():
+    """A negative weight (even with positive sum) would give nonsense bucket
+    counts — reject it rather than silently mis-partition."""
+    with pytest.raises(ValueError, match="non-negative"):
+        split_configs(_cfgs(4), [FakeExec("a"), FakeExec("b")], weights=[3, -1])
 
 
 def test_split_weighted():

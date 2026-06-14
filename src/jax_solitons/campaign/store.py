@@ -70,7 +70,7 @@ class MemoryBlobStore:
         return [k for k in self._d if k.startswith(prefix)]
 
 
-class S3BlobStore:
+class S3BlobStore:  # pragma: no cover  (live S3/boto3; not exercised in CI)
     """`BlobStore` over any S3-compatible service (AWS S3, R2, MinIO, GCS-S3).
 
     `prefix` scopes all keys under a bucket sub-path and is stripped from

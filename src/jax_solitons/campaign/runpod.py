@@ -83,8 +83,10 @@ def _read_key(explicit: str | None = None) -> str:
 _UA = "jax-solitons-runpod-provider"
 
 
-def _req(method: str, url: str, key: str, payload=None, timeout: float = 30):
-    """One JSON HTTP call; raises RunPodError on a non-2xx (body quoted)."""
+def _req(method: str, url: str, key: str, payload=None, timeout: float = 30):  # pragma: no cover
+    """One JSON HTTP call; raises RunPodError on a non-2xx (body quoted).
+
+    Live HTTP to RunPod; unit tests monkeypatch this, so its body isn't covered."""
     data = json.dumps(payload).encode() if payload is not None else None
     headers = {"Authorization": f"Bearer {key}", "Accept": "application/json",
                "User-Agent": _UA}
