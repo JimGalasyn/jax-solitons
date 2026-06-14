@@ -6,6 +6,7 @@ registered/streamed/triggered artifacts the contract promises (A/B/C/E), and
 the optimizer-state resume is bit-identical (B, P4).
 """
 
+import contextlib
 import json
 
 import jax
@@ -18,9 +19,15 @@ jax.config.update("jax_enable_x64", True)
 from jax_solitons.campaign import (  # noqa: E402
     AdmissionError,
     FileRunRegistry,
+    HostProbeFailed,
+    HostSpec,
     JsonlEventSink,
+    LaunchSpec,
     LocalExecutor,
+    Offer,
     ProbeAdmission,
+    Provider,
+    RentedHost,
     run_campaign,
 )
 from jax_solitons.campaign.protocols import RunContext  # noqa: E402
@@ -285,3 +292,126 @@ def test_admission_probe_exception_is_hard_reject(monkeypatch):
     assert r.probe_ok is False and r.device_name.startswith("probe-failed")
     with pytest.raises(AdmissionError):
         ProbeAdmission(require_gpu=False).guard()
+
+
+# ---------------------------------------------------------------- F (P9, P10) --
+def _offer(oid, *, dph=0.12, rel=0.99, cuda=12.4):
+    return Offer(id=oid, dph=dph, gpu_name="RTX 3090", num_gpus=1,
+                 reliability=rel, inet_down_mbps=800.0, cuda_max=cuda,
+                 geolocation="Nowhere", provider="fake")
+
+
+class FakeProvider:
+    """In-memory `Provider` for contract tests: no network, no spend.
+
+    Tracks a `live` set so a test can assert the leak-proof teardown actually
+    fired, and `created` to count rental attempts. `bad_ids` come up as failed
+    hosts (HostProbeFailed) — the P9 'host lies' case the executor fails over.
+    """
+
+    name = "fake"
+
+    def __init__(self, offers, bad_ids=()):
+        self._offers = list(offers)
+        self._bad = set(bad_ids)
+        self.live: set[str] = set()       # instances currently rented (==0 ⇒ no leak)
+        self.created: list[str] = []      # every instance ever created
+        self._n = 0
+
+    def offers(self, spec: HostSpec) -> list[Offer]:
+        return sorted(
+            (o for o in self._offers
+             if o.dph <= spec.max_dph and o.reliability >= spec.min_reliability
+             and o.cuda_max >= spec.min_cuda and o.gpu_name == spec.gpu_name),
+            key=lambda o: o.dph)
+
+    @contextlib.contextmanager
+    def rent(self, offer: Offer, launch: LaunchSpec, *, timeout_s: float = 600):
+        iid = f"inst-{self._n}"
+        self._n += 1
+        self.created.append(iid)
+        self.live.add(iid)                # meter "on"
+        try:
+            if offer.id in self._bad:
+                raise HostProbeFailed(f"fake bad host {offer.id}")
+            yield RentedHost(id=iid, ssh_host="fake.host", ssh_port=22,
+                             offer=offer)
+        finally:
+            self.live.discard(iid)        # GUARANTEED teardown — the F invariant
+
+
+_SPEC = HostSpec(gpu_name="RTX 3090", max_dph=0.30, min_reliability=0.95,
+                 min_cuda=12.2)
+_LAUNCH = LaunchSpec(image="img:12.2", onstart="echo hi", disk_gb=24.0)
+
+
+def test_fake_provider_satisfies_protocol():
+    """A FakeProvider structurally IS a Provider (the contract is duck-typed)."""
+    assert isinstance(FakeProvider([]), Provider)
+
+
+def test_provider_offers_filter_and_order():
+    """F discovery: offers() honours the HostSpec bar and returns cheapest-first.
+    The min_cuda gate (P10) drops a host whose driver is older than the image."""
+    fake = FakeProvider([
+        _offer("cheap-but-old", dph=0.08, cuda=12.0),   # dropped: cuda < 12.2
+        _offer("pricey", dph=0.25),
+        _offer("cheap-ok", dph=0.10),
+        _offer("too-dear", dph=0.40),                   # dropped: dph > max
+    ])
+    got = [o.id for o in fake.offers(_SPEC)]
+    assert got == ["cheap-ok", "pricey"]                # filtered + sorted by dph
+
+
+def test_rent_yields_host_and_tears_down():
+    """F invariant: rent yields a reachable RentedHost and the meter is off
+    after the block — no leak on the happy path."""
+    fake = FakeProvider([_offer("a")])
+    (off,) = fake.offers(_SPEC)
+    with fake.rent(off, _LAUNCH) as host:
+        assert isinstance(host, RentedHost)
+        assert host.ssh_host == "fake.host" and host.offer.id == "a"
+        assert fake.live == {host.id}                   # metered while inside
+    assert fake.live == set()                           # torn down on exit
+
+
+def test_rent_tears_down_on_exception():
+    """F invariant: teardown fires even when the body raises — a crashed run
+    never leaks a billing GPU."""
+    fake = FakeProvider([_offer("a")])
+    (off,) = fake.offers(_SPEC)
+    with pytest.raises(ValueError):
+        with fake.rent(off, _LAUNCH):
+            raise ValueError("run blew up")
+    assert fake.live == set()                           # still torn down
+
+
+def test_rent_bad_host_raises_and_tears_down():
+    """F + P9: a host that fails to come up raises HostProbeFailed (the failover
+    signal) AND is still torn down."""
+    fake = FakeProvider([_offer("bad")], bad_ids={"bad"})
+    (off,) = fake.offers(_SPEC)
+    with pytest.raises(HostProbeFailed):
+        with fake.rent(off, _LAUNCH):
+            pass
+    assert fake.live == set()                           # bad host torn down too
+
+
+def test_provider_failover_pattern():
+    """The idiom a ProviderExecutor (Phase 2/D) will use over any Provider: try
+    offers cheapest-first, HostProbeFailed -> next, with teardown guaranteed on
+    every attempt. Proves the F contract supports failover without leaking."""
+    fake = FakeProvider(
+        [_offer("a", dph=0.10), _offer("b", dph=0.11), _offer("c", dph=0.12)],
+        bad_ids={"a", "b"})                              # two bad, cheapest-first
+    ran = None
+    for off in fake.offers(_SPEC):
+        try:
+            with fake.rent(off, _LAUNCH) as host:
+                ran = host.offer.id
+                break
+        except HostProbeFailed:
+            continue
+    assert ran == "c"                                    # failed over past a, b
+    assert fake.live == set()                            # nothing left billing
+    assert fake.created == ["inst-0", "inst-1", "inst-2"]  # all 3 attempted+down

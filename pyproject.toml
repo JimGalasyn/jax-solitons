@@ -69,3 +69,21 @@ testpaths = ["tests"]
 markers = [
   "acceptance: regression contract gates (the validation chain of the source engine)",
 ]
+
+[tool.coverage.run]
+omit = [
+  # Optional cloud integration: needs the `modal` SDK (not a CI test dep) and a
+  # live Modal account/GPU to exercise. Its run_one unit + the seam it plugs into
+  # are covered; the modal-specific glue can't be unit-tested without modal.
+  "*/campaign/modal_exec.py",
+]
+
+[tool.coverage.report]
+exclude_also = [
+  "if __name__ == .__main__.:",
+  "raise NotImplementedError",
+  "\\.\\.\\.",                 # Protocol method bodies (ellipsis stubs)
+  "if TYPE_CHECKING:",
+  "def __str__",              # cosmetic formatters
+  "def __repr__",
+]

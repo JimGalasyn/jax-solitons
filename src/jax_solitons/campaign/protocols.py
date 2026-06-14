@@ -13,6 +13,15 @@ Contract letters map to DESIGN.md principles:
   C  EventSink     event-records-not-fields + triggered capture      (P6, P7)
   D  Executor      spot-fleet fan-out + preemption recovery          (adopted)
   E  Admission     probe-or-bail on flaky marketplace hosts          (P9)
+  F  Provider      pluggable cloud broker: offers + leak-proof rent   (P9, P10)
+
+A and B/C/E are the unserved contract this package owns; D is delegated to a
+pluggable `Executor`. F is the second build-thin seam: the marketplace brokers
+SkyPilot's providers can't drive (its Vast provider is broken against the live
+API, P10) plug in here behind one Protocol, so a new cloud is a ~150-line
+adapter, not a fork. The reference `VastProvider` lives in `vast.py`; serverless
+backends (Modal, RunPod-serverless) have no host to rent and so are NOT
+Providers -- they slot in at the Executor (D) seam instead.
 
 The ONLY soliton-specific thing crossing this boundary is `RunFn`: the physics
 is injected as a callable. No module under `campaign/` imports a model or
@@ -26,6 +35,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Iterable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
 
@@ -194,3 +204,130 @@ class Executor(Protocol):
 
 class AdmissionError(RuntimeError):
     """A host failed its capacity probe and must not run work (P9)."""
+
+
+# ============================================================ F (P9, P10) ====
+# The cloud-broker seam: pick a host from a marketplace, rent it, and ALWAYS
+# tear it down. Selection metadata lies (P9), provider SDKs lag the live API
+# (P10), and a leaked GPU bills by the second -- so the Protocol fixes the
+# *shape* (offers -> rent -> guaranteed teardown) and a thin per-provider
+# adapter fills in the HTTP. Only "rent-a-box-and-SSH" markets (Vast, RunPod
+# pods, TensorDock, EC2 spot) are Providers; serverless is an Executor (D).
+
+
+@dataclasses.dataclass(frozen=True)
+class HostSpec:
+    """What the campaign needs from a host -- how a `Provider` selects offers.
+
+    The selection-time half of admission (P9): a coarse filter the marketplace
+    can apply server-side, made rigorous per-host later by `Admission.guard`.
+
+    `min_cuda` is load-bearing and easy to get wrong: it must be >= the launch
+    image's CUDA floor (`NVIDIA_REQUIRE_CUDA`), or the nvidia-container OCI hook
+    fails at *container create* on hosts whose driver is older than the image --
+    a failure that looks like a broken host but is really an image/host mismatch
+    (measured 2026-06-14: a cuda:12.4 image hard-failed create on ~16/17 cheap
+    hosts; cuda:12.2 + min_cuda=12.2 -> 0 failures).
+    """
+
+    gpu_name: str = "RTX_3090"
+    num_gpus: int = 1
+    max_dph: float = 0.40            # $ per hour ceiling, all-in
+    min_reliability: float = 0.95
+    min_inet_mbps: float = 100.0
+    min_cuda: float = 12.0           # >= the LaunchSpec image's CUDA floor
+
+
+@dataclasses.dataclass(frozen=True)
+class Offer:
+    """A rentable host a `Provider` surfaced (the fields an executor decides on).
+
+    `id` is a provider-opaque string (not every market uses ints); `provider`
+    names which adapter minted it so a mixed-provider queue stays attributable.
+    """
+
+    id: str
+    dph: float                       # $ per hour, all-in
+    gpu_name: str
+    num_gpus: int
+    reliability: float               # 0..1
+    inet_down_mbps: float
+    cuda_max: float                  # host's max supported CUDA (the P10 gate)
+    geolocation: str = ""
+    provider: str = ""
+
+    def __str__(self) -> str:
+        return (f"offer {self.id}: {self.num_gpus}x {self.gpu_name} "
+                f"${self.dph:.3f}/hr  rel={self.reliability:.3f}  "
+                f"down={self.inet_down_mbps:.0f}Mbps  cuda<={self.cuda_max}  "
+                f"[{self.geolocation.strip(', ')}]"
+                + (f"  @{self.provider}" if self.provider else ""))
+
+
+@dataclasses.dataclass(frozen=True)
+class LaunchSpec:
+    """How to bring a rented host up: the container image + bootstrap + disk.
+
+    `image`'s CUDA floor must be <= the chosen offer's `cuda_max` (see
+    `HostSpec.min_cuda`). `onstart` is the bootstrap script the host runs on
+    boot; it should signal readiness/failure so `rent` can probe-and-bail (P9).
+    """
+
+    image: str
+    onstart: str
+    disk_gb: float = 40.0
+
+
+@dataclasses.dataclass(frozen=True)
+class RentedHost:
+    """A live, reachable host that `Provider.rent` yields.
+
+    SSH coordinates because Providers are the rent-a-box markets; the executor
+    ships inputs and a worker command here. `offer` is carried so cost and geo
+    stay attached to the running host; `raw` is the provider's untyped record.
+    """
+
+    id: str
+    ssh_host: str
+    ssh_port: int
+    offer: Offer
+    raw: dict = dataclasses.field(default_factory=dict)
+
+
+class HostProbeFailed(RuntimeError):
+    """A rented host came up unusable -- DNS/image-pull/disk/zero-outbound: the
+    P9 'hosts lie' case. The executor tears it down and fails over to the next
+    offer rather than running work on it."""
+
+
+@runtime_checkable
+class Provider(Protocol):
+    """A pluggable cloud broker: list offers, rent one, ALWAYS tear it down (F).
+
+    The contract is three things, and the third is the point:
+
+      1. `offers(spec)` returns rentable hosts meeting the bar, cheapest first.
+      2. `rent(offer, launch)` brings a host up and yields a `RentedHost`.
+      3. **`rent` is a context manager whose teardown is guaranteed and
+         verified** -- it destroys the host on EVERY exit (success, exception,
+         Ctrl-C) and independently confirms it is gone, raising on a leak. A
+         leaked GPU bills by the second; teardown is the contract, not an
+         implementation nicety. Adapters that cannot prove teardown do not
+         satisfy `Provider`.
+
+    `rent` raises `HostProbeFailed` when the host comes up unusable, so the
+    executor can fail over; any other provider error propagates. `name`
+    identifies the adapter (stamped onto `Offer.provider`).
+    """
+
+    name: str
+
+    def offers(self, spec: HostSpec) -> list[Offer]:
+        """Rentable offers meeting `spec`, cheapest first (free; no spend)."""
+        ...
+
+    def rent(self, offer: Offer, launch: LaunchSpec, *,
+             timeout_s: float = 600) -> AbstractContextManager[RentedHost]:
+        """Rent `offer`, wait until usable, yield a `RentedHost`, guarantee+verify
+        teardown on exit. Raises `HostProbeFailed` if the host never comes up."""
+        ...

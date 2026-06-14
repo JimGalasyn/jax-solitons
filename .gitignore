@@ -6,7 +6,9 @@ build/
 .venv/
 .pytest_cache/
 output/
+.claude/
 
 # coverage artifacts
 .coverage
 coverage.xml
+campaign_out/
