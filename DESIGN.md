@@ -42,7 +42,10 @@ free capacity instead of risk.
 dtype is a `BoxGrid` parameter, never a global flag. The protocol is
 **hunt fp32, certify x64** (measured: fp32 is ~4.4x faster and endpoint-
 identical to 4 significant figures on these bandwidth-bound workloads —
-but physics claims are certified in x64).
+but physics claims are certified in x64). The 4-sig-fig figure is for
+descent endpoints and short integration; long real-time Hamiltonian /
+Kibble–Zurek-length evolutions accumulate fp32 phase error that step-wise
+conservation hides, so time-resolved dynamics are certified in x64.
 
 ## P6. Event records, not raw fields
 
