@@ -20,6 +20,32 @@ def test_with_time_limit_returns_fn_result():
     assert with_time_limit(10, lambda: 42, "default") == 42
 
 
+def test_with_time_limit_fires_and_returns_default():
+    """A fn that overruns the budget gets SIGALRM'd and yields the default."""
+    import time
+    assert with_time_limit(1, lambda: time.sleep(5), "timed-out") == "timed-out"
+
+
+def test_identify_knot_resamples_long_curve():
+    """A curve longer than max_points is arc-length resampled before pyknotid;
+    a trefoil downsampled to 200 pts still IDs as det 3 (T(2,3))."""
+    pytest.importorskip("pyknotid")
+    info = identify_knot(torus_knot(2, 3, n=400), max_points=200)   # 400 > 200
+    assert info["determinant"] == 3 and info["n_points"] == 400      # length/n on original
+
+
+def test_core_curves_from_n_honours_extra_mask():
+    """extra_mask further restricts seeding; an all-True mask is a no-op that
+    still recovers the circle (exercises the mask-AND path)."""
+    N, L, R = 48, 8.0, 2.0
+    ax = np.linspace(-L / 2, L / 2, N, endpoint=False)
+    X, Y, Z = np.meshgrid(ax, ax, ax, indexing="ij")
+    loops = core_curves_from_n(Z, np.sqrt(X**2 + Y**2) - R, np.ones_like(Z),
+                               (ax, ax, ax), seed_tol=0.30,
+                               extra_mask=np.ones(Z.shape, bool))
+    assert loops
+
+
 def test_identify_knot_short_curve_is_trivially_unknot():
     assert identify_knot(np.zeros((2, 3)))["determinant"] == 1   # <4 pts
 
