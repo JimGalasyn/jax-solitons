@@ -38,10 +38,10 @@ intersection none of them do, built on four design commitments:
 3. **Topology-preserving, stencil-local numerics.** The topological charge is
    discretized by the Berg-Lüscher plaquette solid-angle (area form) — which
    measures honestly *and* presents a real unwinding barrier, where naive
-   discretizations admit none at any resolution. The solid-angle form is the
-   established best-in-class Hopf-index discretization (most accurate,
-   fastest-converging of four methods benchmarked in Phys. Rev. B **111**,
-   134408 (2025); also packaged as `pyhopf` and a MuMax3 extension); what is
+   discretizations admit none at any resolution. The geometric area-form
+   construction is a principled, established route to a faithful
+   topological-charge discretization, and the numerics of the 3D Hopf index
+   are an active question (cf. Phys. Rev. B **111**, 134408 (2025)); what is
    new here is carrying it as a *native, differentiable* primitive of a
    composable, farm-scale engine rather than a post-hoc diagnostic. All
    canonical operators are stencil-local, so they JIT, vectorize,
