@@ -151,10 +151,10 @@ def trace_implicit_curve(g1, g2, axes, mask=None, h=None, seed_tol=0.30,
     if mask is not None:
         s = np.where(mask, s, np.inf)
     order = np.argsort(s, axis=None)
-    ax_grid = np.meshgrid(*axes, indexing="ij")
 
     loops = []
     loop_pts = []          # flat list of all accepted loop points (for dedup)
+    seed_tree = None       # KD-tree over loop_pts; rebuilt only when a loop lands
     tube = max(1.5 * dx, h)
 
     for flat in order:
@@ -163,17 +163,16 @@ def trace_implicit_curve(g1, g2, axes, mask=None, h=None, seed_tol=0.30,
         ijk = np.unravel_index(flat, shape)
         if s[ijk] > seed_tol**2:
             break                                   # no good seeds remain
-        X0 = np.array([ax_grid[k][ijk] for k in range(3)])
+        # seed coordinate straight from the 1D axes (no full meshgrid allocation)
+        X0 = np.array([axes[k][ijk[k]] for k in range(3)])
         X0 = correct(X0)
         if not (np.all(X0 >= lo) and np.all(X0 <= hi)):
             continue
         g, J = field_jac(X0)
         if np.hypot(*g) > seed_tol:
             continue
-        if loop_pts:                                # skip seeds on an existing loop
-            tr = cKDTree(np.array(loop_pts))
-            if tr.query(X0)[0] < tube:
-                continue
+        if seed_tree is not None and seed_tree.query(X0)[0] < tube:
+            continue                                # seed sits on an existing loop
         T = tangent(J)
         if T is None:
             continue
@@ -202,6 +201,7 @@ def trace_implicit_curve(g1, g2, axes, mask=None, h=None, seed_tol=0.30,
             P = np.array(path)
             loops.append(P)
             loop_pts.extend(P.tolist())
+            seed_tree = cKDTree(np.array(loop_pts))   # rebuild only on acceptance
 
     loops.sort(key=len, reverse=True)
     return loops
@@ -246,7 +246,7 @@ def with_time_limit(seconds, fn, default):
         raise TimeoutError
 
     old = signal.signal(signal.SIGALRM, _raise)
-    signal.alarm(int(seconds))
+    signal.alarm(max(1, int(np.ceil(seconds))))   # ceil+clamp: int(0.x)=0 disables it
     try:
         return fn()
     except TimeoutError:  # pragma: no cover  (timing-dependent)
