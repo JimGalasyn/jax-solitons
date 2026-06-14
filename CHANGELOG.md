@@ -22,6 +22,22 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `FakeProvider` contract test (zero-spend) covering leak-proof teardown on
   success, on exception, and on a bad host, plus the cheapest-first failover
   idiom.
+- **Remote campaign execution (the Executor/D seam).** A closure can't cross a
+  network, so remote workers receive a config (JSON) + a RunFn *by name*
+  (`'module:function'`) + a work dir, and run the shared `execute_config`
+  (factored out of the driver) — identical register/skip/resume/finish on every
+  machine. Adds `campaign.remote` (`run_one`, `load_run_fn`), a
+  `campaign.worker` CLI, and:
+  - **`ModalExecutor`** — serverless fan-out via `Function.map`, a Modal
+    Volume-backed registry; Modal owns the lifecycle (no host to rent or leak).
+    `modal` is an optional dependency (imported only by `campaign.modal_exec`).
+  - **`ProviderExecutor`** — runs a campaign over any `Provider` (Vast/RunPod):
+    offers → rent with per-host failover → SSH the worker per config → sync
+    artifacts back → leak-proof teardown. Generalizes the `run_eps_fleet` driver.
+- **`campaign.multi`** — `run_multi` / `split_configs` drive one campaign across
+  several executors at once (partition-and-merge). Content-addressed run identity
+  (`config_hash`) makes the cross-provider harvest collision-free; a failing
+  provider is isolated.
 
 ### Changed
 - `VastClient` → **`VastProvider`**, now implementing the `Provider` Protocol:

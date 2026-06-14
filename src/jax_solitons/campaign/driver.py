@@ -14,12 +14,46 @@ from collections.abc import Iterable
 from jax_solitons.campaign.protocols import (
     Admission,
     EventSink,
-    Executor,
     RunConfig,
     RunContext,
     RunFn,
     RunRegistry,
 )
+from jax_solitons.campaign.protocols import Executor  # noqa: F401  (re-exported)
+
+
+def execute_config(config: RunConfig, run_fn: RunFn, *,
+                   registry: RunRegistry, sink: EventSink) -> dict | None:
+    """Run ONE config end to end against (registry, sink) and return its result.
+
+    register (A) -> skip if already complete, returning None (idempotent
+    preemption recovery, D) -> resume from full state or start fresh (B) -> run
+    the physics with a wired RunContext (C) -> finish. The sink is flushed even
+    if the physics raises (a preemption modeled as an exception), so no DONE is
+    written but the events persist and the run resumes.
+
+    This is the campaign's unit of work, factored out of `run_campaign` so a
+    REMOTE worker (Modal function, rented SSH box) can invoke the exact same
+    semantics with a locally-built, shared-storage-backed registry -- the only
+    difference being which machine it runs on. See `campaign.remote`.
+    """
+    handle = registry.register(config)
+    if registry.is_complete(handle):
+        return None                               # preemption no-op (P4/D)
+    resume = registry.load(handle)
+    ctx = RunContext(
+        resume=None if resume is None else resume[0],
+        resume_step=None if resume is None else resume[1],
+        checkpoint=lambda state, step: registry.save(handle, state, step),
+        emit=lambda record: sink.emit(handle, record),
+        trigger=lambda state, reason: sink.trigger(handle, state, reason),
+    )
+    try:
+        result = run_fn(config, ctx)
+        registry.finish(handle, result)
+        return result
+    finally:
+        sink.close(handle)
 
 
 def run_campaign(
@@ -47,26 +81,9 @@ def run_campaign(
     far the work queue itself streams is then the Executor's choice.
     """
     def task_for(config):
-        def task():
-            handle = registry.register(config)            # registered by its worker
-            if registry.is_complete(handle):
-                return                                    # preemption no-op (P4/D)
-            resume = registry.load(handle)
-            ctx = RunContext(
-                resume=None if resume is None else resume[0],
-                resume_step=None if resume is None else resume[1],
-                checkpoint=lambda state, step: registry.save(handle, state, step),
-                emit=lambda record: sink.emit(handle, record),
-                trigger=lambda state, reason: sink.trigger(handle, state, reason),
-            )
-            try:
-                result = run_fn(config, ctx)
-                registry.finish(handle, result)
-            finally:
-                # Flush the run's stream even if run_fn/finish raises (e.g. a
-                # preemption modeled as an exception) -- no DONE is written on
-                # failure, so the run still resumes, but its events persist.
-                sink.close(handle)
-        return task
+        # Each task runs the unit of work on whichever worker picks it up; the
+        # register/skip/resume/finish logic lives in execute_config (shared with
+        # the remote workers in campaign.remote).
+        return lambda: execute_config(config, run_fn, registry=registry, sink=sink)
 
     executor.run((task_for(c) for c in configs), admission)   # lazy generator

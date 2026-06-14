@@ -13,7 +13,7 @@ behind one Protocol; `VastProvider` is the reference adapter. This module stays
 internal until rule-of-three, then lifts out as a standalone package.
 """
 
-from jax_solitons.campaign.driver import run_campaign
+from jax_solitons.campaign.driver import execute_config, run_campaign
 from jax_solitons.campaign.protocols import (
     Admission,
     AdmissionError,
@@ -39,8 +39,16 @@ from jax_solitons.campaign.reference import (
     ProbeAdmission,
     SkyPilotExecutor,
 )
+from jax_solitons.campaign.multi import CampaignReport, run_multi, split_configs
+from jax_solitons.campaign.provider_exec import ProviderExecutor
+from jax_solitons.campaign.remote import load_run_fn, run_one
 from jax_solitons.campaign.runpod import RunPodProvider
 from jax_solitons.campaign.vast import VastLedger, VastProvider
+
+# ModalExecutor is intentionally NOT imported here: `modal` is an optional
+# dependency, so `import jax_solitons.campaign` must not require it. Use
+# `from jax_solitons.campaign.modal_exec import ModalExecutor` when modal is
+# installed.
 
 __all__ = [
     # protocols (the contract)
@@ -50,8 +58,10 @@ __all__ = [
     "HostSpec", "LaunchSpec", "Offer", "RentedHost", "HostProbeFailed",
     # reference implementations
     "FileRunRegistry", "JsonlEventSink", "ProbeAdmission",
-    "LocalExecutor", "SkyPilotExecutor",
+    "LocalExecutor", "SkyPilotExecutor", "ProviderExecutor",
     "VastProvider", "VastLedger", "RunPodProvider",
-    # driver
-    "run_campaign",
+    # driver + remote-worker core
+    "run_campaign", "execute_config", "run_one", "load_run_fn",
+    # multi-provider partition-and-merge
+    "run_multi", "split_configs", "CampaignReport",
 ]

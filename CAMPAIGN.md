@@ -112,10 +112,48 @@ right. Both adapters are stdlib-only (urllib) and CI-tested against a mocked
 HTTP layer (no spend); `offers()` was also validated live against each cloud's
 real catalog.
 
-The `ProviderExecutor` that drives *any* `Provider` from `run_campaign` is the
-next step (it ships configs + a worker, since `Executor.run` takes opaque thunks
-a remote box can't receive — see TODO.md collider-campaign item 4). This change
-lands the F contract + **two** reference adapters + their tests.
+This lands the F contract + **two** reference adapters + their tests; the
+executors that drive them are below.
+
+## Remote execution: shipping work, not closures (2026-06-14)
+
+`Executor.run(tasks, admission)` takes opaque thunks that close over the local
+`run_fn` and registry — a fine model for an **in-process** worker (`LocalExecutor`)
+or a SkyPilot-managed node that re-runs the program, but a closure can't cross a
+network. So remote execution ships three serializable things instead: the
+**configs** (`RunConfig.to_json`), the **RunFn by name** (a `'module:function'`
+ref the worker imports — the seam's one physics injection, made shippable), and
+a **work dir** on shared storage. `campaign.remote.run_one` is the unit both
+remote workers run; it calls the same `execute_config` (factored out of the
+driver) so register/skip/resume/finish semantics are identical on every machine.
+
+Two remote executors consume this, one per cloud topology:
+
+- **`ModalExecutor`** (serverless / D). `Function.map` over the configs; each
+  call runs `run_one` against a **Modal Volume** mounted as the registry root
+  (checkpoints/events/triggered captures persist there; small result records
+  ride the `.map` return). No host to rent or leak — Modal owns the lifecycle —
+  so `admission` (E) is a no-op. `modal` is an optional dependency: imported only
+  by `campaign.modal_exec`, never by `campaign/__init__`.
+- **`ProviderExecutor`** (rented fleet / D over F). Drives any `Provider`: pull
+  offers, rent with **per-host failover** (`HostProbeFailed` → next offer), wait
+  for the engine to come up (probe `import jax_solitons` over SSH, P9), run the
+  `worker` CLI per config over SSH, sync artifacts back, and lean on the
+  Provider's leak-proof `rent()` for teardown. The principled generalization of
+  the hand-rolled `run_eps_fleet` driver. (v1 is single-host-sequential;
+  multi-host parallel fan-out is a follow-up.)
+
+**Across providers (partition-and-merge).** `multi.run_multi` drives one
+campaign over several executors at once -- `split_configs` partitions the work
+(round-robin or weighted toward cheaper clouds), each executor runs its slice
+concurrently, and the result records merge into one harvest. This is *sensible*
+because run identity is content-addressed (`config_hash`): a record names its
+config regardless of which cloud produced it, so the merge can't collide, and a
+failed provider is isolated (its slice errors; the rest still harvest). It
+assumes a **disjoint** partition -- `is_complete`/resume are per-executor here.
+Global dedup, cross-provider resume, and a single artifact store are the job of
+a shared `RunRegistry` backend (an object-store impl of A/B) -- a second
+backend, not a new seam -- which is the documented next step.
 
 ## The contract → DESIGN.md principles
 
@@ -167,8 +205,10 @@ implementations (functional) plus a `SkyPilotExecutor` stub (documents the
 intended mapping, raises `NotImplementedError`); `vast.py` is the reference
 `Provider` (F). The local/reference path is **CI-gated** —
 `tests/test_campaign.py` drives the A/B/C/E contract end-to-end (including the
-relax-then-ID `RunFn` and bit-identical resume) and the F contract via a
+relax-then-ID `RunFn` and bit-identical resume); the F contract is tested via a
 zero-spend `FakeProvider` (leak-proof teardown on success/exception/bad-host +
-failover) under the default `pytest` job; only the SkyPilot executor and the
-`ProviderExecutor` wiring remain to build. The boundary is drawn and tested, so
+failover); the shared remote core (`run_one`/`load_run_fn`) and `ProviderExecutor`
+(failover + teardown over a `FakeProvider`, mocked SSH) are CI-gated too. The
+`ModalExecutor` is validated by a live run (not CI — it needs Modal + a GPU).
+Only the `SkyPilotExecutor` remains a stub. The boundary is drawn and tested, so
 the collider-campaign work (TODO.md) builds against a fixed, exercised contract.
