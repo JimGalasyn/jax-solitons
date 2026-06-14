@@ -93,3 +93,24 @@ def test_aspect_ratio_target_comes_from_the_oracle(grid):
     kappa_meas, _, _ = aspect_ratio(
         flux_threaded_knot_seed(grid, 2, 3, 1), grid, 2, 3)
     assert kappa_meas > 0 and 5.0 < kappa_target < 15.0
+
+
+def test_seed_rejects_nonpositive_xi(grid):
+    """xi (Higgs healing length) is a divisor in the modulus/gauge profiles;
+    a non-positive value must fail loudly, not produce a broken seed (P9)."""
+    with pytest.raises(ValueError, match="xi"):
+        flux_threaded_knot_seed(grid, 2, 3, 1, xi=0.0)
+
+
+def test_aspect_ratio_rejects_nonpositive_v(grid):
+    """v=0 would divide-by-zero the core indicator; reject it early."""
+    with pytest.raises(ValueError, match="must be positive"):
+        aspect_ratio(flux_threaded_knot_seed(grid, 2, 3, 1), grid, 2, 3, v=0.0)
+
+
+def test_aspect_ratio_rejects_coreless_state(grid):
+    """A filled-in state (|psi| = v everywhere) has no flux tube to measure;
+    aspect_ratio must raise rather than return inf/NaN."""
+    flat = jnp.zeros((7, grid.N, grid.N, grid.N), grid.dtype).at[0].set(1.0)
+    with pytest.raises(ValueError, match="no Higgs-core weight"):
+        aspect_ratio(flat, grid, 2, 3, v=1.0)

@@ -186,14 +186,20 @@ def aspect_ratio(state, grid: BoxGrid, p: int, q: int, v: float = 1.0):
     Returns (kappa, R, a0). A moment estimate at the paper's own altitude ("an
     O(10) number consistent with pi^2 within ~15%"), not a precise core trace.
     """
+    if v <= 0:
+        raise ValueError(f"v (vacuum modulus) must be positive (got {v}).")
     psi1, psi2, _ = unpack(state)
     mod2 = jnp.abs(psi1) ** 2 + jnp.abs(psi2) ** 2
     w = jnp.clip(1.0 - mod2 / v**2, 0.0, 1.0)
     X, Y, _Z = grid.coords()
     rho_cyl = jnp.sqrt(jnp.asarray(X) ** 2 + jnp.asarray(Y) ** 2)
-    wsum = jnp.sum(w)
-    R = float(jnp.sum(w * rho_cyl) / wsum)
-    V = float(wsum) * grid.dx**3
+    wsum = float(jnp.sum(w))
+    if wsum <= 0.0:
+        raise ValueError(
+            "no Higgs-core weight (|psi| ~ v everywhere): the state has no flux "
+            "tube to measure, or v is mismatched to the field's vacuum modulus.")
+    R = float(jnp.sum(w * rho_cyl)) / wsum
+    V = wsum * grid.dx**3
     # arc length of T(p,q) at major radius R, minor R/2 (the seed's b = 0.4 R
     # ~ R/2); length is insensitive to the exact minor radius at this altitude.
     s = np.linspace(0.0, 2.0 * np.pi, 4000, endpoint=False)

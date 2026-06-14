@@ -246,6 +246,8 @@ def flux_threaded_knot_seed(grid: BoxGrid, p: int, q: int, m: int = 1,
     R, b, w = _knot_geometry(grid, R, b, w)
     if xi is None:
         xi = 0.5 * w
+    if xi <= 0:
+        raise ValueError(f"xi (Higgs healing length) must be positive (got {xi}).")
 
     g, t, s_param = _torus_knot_curve(p, q, R, b, S)
     r, u = _closed_rmf(g, t)
