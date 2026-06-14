@@ -34,6 +34,12 @@ dependencies = [
 test = [
   "pytest>=8",
   "pytest-cov>=4",
+  "pyknotid>=0.5",          # exercises the jax_solitons.knots ID tests in CI
+]
+knots = [
+  # Core-curve knot identification (jax_solitons.knots.identify_knot). Optional:
+  # tracing curves needs only numpy/scipy; the Alexander determinant needs this.
+  "pyknotid>=0.5",
 ]
 oracle = [
   # Pure-numpy reference engine for the cross-engine equivalence test
