@@ -79,3 +79,30 @@ Optimization targets come from profiles of real campaigns, not intuition.
 Current measured cost center: identification (CPU tracing), not GPU
 dynamics. The roadmap (TODO.md) cites measurements next to every
 scaling item.
+
+## P11. The engine↔theory firewall
+
+This engine **measures**; it does not **define** theory values. Any constant
+that is a prediction of the theory (the NWT substrate) is sourced from
+`nwt-substrate` (the optional `oracle` extra) or gated against it — never
+hard-coded here. Cross-engine gates `pytest.importorskip` the oracle and
+self-skip when it is absent, so local dev stays dependency-free while CI
+(`.[test,oracle]`) runs them.
+
+- **Theory constants come from the oracle.** The torus aspect ratio
+  κ ← `nwt_substrate.isa.constants.KAPPA_MACKEN`; the BPS line tension
+  μ = 2πv² ← `nwt_substrate.condensate.line_tension_BPS`; the substrate
+  couplings (e = √4πα, v = m_e, λ) ← `condensate.AbelianHiggsParams.
+  substrate_natural`. A value rolled locally and presented as the theory's is
+  a firewall break (the κ = π² regression, 2026-06, is the case study).
+
+- **Free knobs are inputs, not theory.** `e, v, λ, c2, c4` are model
+  parameters with documented conventions — e.g. the self-dual coupling is
+  λ=2e² in this engine's `|Dφ|²+½F²` normalization but λ=e²/2 in the
+  substrate's (the same physics under ψ=√2φ). The firewall therefore gates
+  the convention-INDEPENDENT invariant (the BPS line tension μ/v² = 2π), NOT
+  the convention-dependent coupling λ.
+
+- **Engine measurements stay local.** Energy, Q_H, magnetic flux,
+  `aspect_ratio` describe this engine's own soliton; they are the quantities
+  the gates compare against the oracle, not theory inputs to import.
