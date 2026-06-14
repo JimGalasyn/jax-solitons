@@ -45,6 +45,7 @@ from jax_solitons.campaign.multi import (
     split_configs,
     stream_multi,
 )
+from jax_solitons.campaign.local_exec import InProcessExecutor
 from jax_solitons.campaign.provider_exec import ProviderExecutor
 from jax_solitons.campaign.remote import load_run_fn, run_one
 from jax_solitons.campaign.store import (
@@ -70,7 +71,7 @@ __all__ = [
     "HostSpec", "LaunchSpec", "Offer", "RentedHost", "HostProbeFailed",
     # reference implementations
     "FileRunRegistry", "JsonlEventSink", "ProbeAdmission",
-    "LocalExecutor", "SkyPilotExecutor", "ProviderExecutor",
+    "LocalExecutor", "SkyPilotExecutor", "ProviderExecutor", "InProcessExecutor",
     "VastProvider", "VastLedger", "RunPodProvider",
     # shared object-store backend (A/B/C over a BlobStore)
     "BlobStore", "MemoryBlobStore", "S3BlobStore",

@@ -40,6 +40,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   provider is isolated. `stream_multi` yields each provider's slice as it
   completes (a fast cloud isn't gated on the slowest); `run_multi(on_result=...)`
   observes them live.
+- **`InProcessExecutor`** (`campaign.local_exec`) — runs configs on the local
+  machine in-process via the shared `run_one`, the same `run(configs)->records`
+  shape as the remote executors, so the local GPU joins a `run_multi` partition
+  alongside the clouds (`split_configs([local, modal, vast, runpod])`).
 - **Shared object-store backend** (`campaign.store`) — `ObjectStoreRunRegistry`
   (A/B) and `ObjectStoreEventSink` (C) over a minimal `BlobStore` (`MemoryBlobStore`
   for tests/single-process; `S3BlobStore` for S3/R2/GCS/MinIO, `boto3` optional).
