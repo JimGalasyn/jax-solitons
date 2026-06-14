@@ -1,0 +1,179 @@
+"""RunPodProvider lifecycle tests with a mocked HTTP layer — no network, no spend.
+
+All HTTP goes through `runpod._req`, so a scriptable fake covers the GraphQL
+gpuTypes catalog (offers) and the REST pod lifecycle (create/status/list/delete),
+including the leak-proof `rent()` teardown that must surface a leak loudly.
+"""
+
+import pytest
+
+import jax_solitons.campaign.runpod as runpod
+from jax_solitons.campaign import (
+    HostProbeFailed,
+    HostSpec,
+    LaunchSpec,
+    Offer,
+    Provider,
+    RentedHost,
+    VastLedger,
+)
+from jax_solitons.campaign.runpod import GQL, REST, RunPodError, RunPodProvider
+
+LAUNCH = LaunchSpec(image="img:12.2", onstart="echo hi", disk_gb=24)
+
+_CATALOG = [
+    dict(id="NVIDIA GeForce RTX 3090", displayName="RTX 3090", memoryInGb=24,
+         secureCloud=True, communityCloud=True, securePrice=0.46, communityPrice=0.22),
+    dict(id="NVIDIA GeForce RTX 3090 Ti", displayName="RTX 3090 Ti", memoryInGb=24,
+         secureCloud=False, communityCloud=True, securePrice=0.46, communityPrice=0.27),
+    dict(id="NVIDIA GeForce RTX 4090", displayName="RTX 4090", memoryInGb=24,
+         secureCloud=True, communityCloud=True, securePrice=0.69, communityPrice=0.34),
+]
+
+
+class FakeRunPod:
+    """Scriptable replacement for runpod._req, routing by (method, url)."""
+
+    def __init__(self, *, status="RUNNING", ip="1.2.3.4", port=40022,
+                 delete_fail=False, delete_noop=False, gql_errors=None):
+        self.status, self.ip, self.port = status, ip, port
+        self.delete_fail, self.delete_noop = delete_fail, delete_noop
+        self.gql_errors = gql_errors
+        self.pods: dict[str, dict] = {}    # id -> pod dict (the "live" set)
+
+    def _pod(self, pid):
+        return {"id": pid, "desiredStatus": self.status, "publicIp": self.ip,
+                "portMappings": {"22": self.port}, "costPerHr": 0.22}
+
+    def __call__(self, method, url, key, payload=None, timeout=30):
+        if url == GQL:                                   # offers catalog
+            if self.gql_errors:
+                return {"errors": self.gql_errors}
+            return {"data": {"gpuTypes": _CATALOG}}
+        if method == "POST" and url == f"{REST}/pods":   # create
+            pid = "pod1"
+            self.pods[pid] = self._pod(pid)
+            return {"id": pid}
+        if method == "GET" and url == f"{REST}/pods":    # list (verify)
+            return list(self.pods.values())
+        if method == "GET" and "/pods/" in url:          # status
+            pid = url.rstrip("/").split("/pods/")[1]
+            return self.pods.get(pid, self._pod(pid))
+        if method == "DELETE" and "/pods/" in url:
+            if self.delete_fail:
+                raise RunPodError("terminate boom")
+            if not self.delete_noop:
+                pid = url.rstrip("/").split("/pods/")[1]
+                self.pods.pop(pid, None)
+            return {}
+        return {}
+
+
+@pytest.fixture
+def mk(monkeypatch):
+    monkeypatch.setenv("RUNPOD_API_KEY", "rpa_testkey")
+    monkeypatch.setattr(runpod.time, "sleep", lambda s: None)
+
+    def make(fake, **kw):
+        monkeypatch.setattr(runpod, "_req", fake)
+        return RunPodProvider(**kw)
+    return make
+
+
+def test_runpod_provider_satisfies_protocol():
+    assert isinstance(RunPodProvider(api_key="x"), Provider)
+
+
+def test_offers_filters_by_tier_price_and_sorts(mk):
+    p = mk(FakeRunPod(), cloud_type="COMMUNITY")
+    offs = p.offers(HostSpec(gpu_name="RTX_3090", max_dph=0.25, num_gpus=1))
+    # 3090 ($0.22) only — 3090 Ti is $0.27 > max; both are community-available.
+    assert [(o.id, o.dph) for o in offs] == [("NVIDIA GeForce RTX 3090", 0.22)]
+    o = offs[0]
+    assert o.provider == "runpod" and o.geolocation == "COMMUNITY"
+    assert o.num_gpus == 1                              # carried for rent's gpuCount
+
+
+def test_offers_secure_tier_excludes_community_only(mk):
+    """3090 Ti has communityCloud only — it must not appear on the SECURE tier."""
+    p = mk(FakeRunPod(), cloud_type="SECURE")
+    ids = [o.id for o in p.offers(HostSpec(gpu_name="RTX_3090", max_dph=1.0))]
+    assert "NVIDIA GeForce RTX 3090 Ti" not in ids
+    assert "NVIDIA GeForce RTX 3090" in ids            # secureCloud True
+
+
+def test_offers_raises_on_graphql_error(mk):
+    p = mk(FakeRunPod(gql_errors=[{"message": "boom"}]))
+    with pytest.raises(RunPodError, match="gpuTypes"):
+        p.offers(HostSpec(gpu_name="RTX_4090"))
+
+
+def test_min_cuda_gate_from_spec(mk):
+    """offers(spec) remembers spec.min_cuda; rent sends allowedCudaVersions >= it."""
+    p = mk(FakeRunPod())
+    p.offers(HostSpec(gpu_name="RTX_4090", max_dph=1.0, min_cuda=12.4))
+    assert p._allowed_cuda() == ["12.4", "12.5", "12.6", "12.7", "12.8", "13.0"]
+
+
+def _offer():
+    return Offer(id="NVIDIA GeForce RTX 4090", dph=0.34, gpu_name="RTX 4090",
+                 num_gpus=1, reliability=float("nan"), inet_down_mbps=float("nan"),
+                 cuda_max=float("nan"), geolocation="COMMUNITY", provider="runpod")
+
+
+def test_rent_happy_path_terminates_and_verifies_gone(mk, tmp_path):
+    led = VastLedger(tmp_path / "l.jsonl")
+    p = mk(FakeRunPod(status="RUNNING"), ledger=led)
+    with p.rent(_offer(), LAUNCH, timeout_s=5) as host:
+        assert isinstance(host, RentedHost)
+        assert host.ssh_host == "1.2.3.4" and host.ssh_port == 40022
+        assert host.offer.id == "NVIDIA GeForce RTX 4090"
+    evs = led.events()
+    assert {e["event"] for e in evs} == {"rented", "running", "destroyed"}
+    d = next(e for e in evs if e["event"] == "destroyed")
+    assert d["destroyed"] is True and d["verify"] == "gone"
+    assert d["provider"] == "runpod" and "est_cost_usd" in d
+
+
+def test_rent_raises_loudly_on_failed_terminate(mk, tmp_path):
+    led = VastLedger(tmp_path / "l.jsonl")
+    p = mk(FakeRunPod(delete_fail=True), ledger=led)
+    with pytest.raises(RunPodError, match="LEAK RISK"):
+        with p.rent(_offer(), LAUNCH, timeout_s=5):
+            pass
+    d = next(e for e in led.events() if e["event"] == "destroyed")
+    assert d["destroyed"] is False
+
+
+def test_rent_raises_when_pod_still_present(mk):
+    # terminate "succeeds" but the pod never leaves the list -> confirmed leak
+    p = mk(FakeRunPod(delete_noop=True))
+    with pytest.raises(RunPodError, match="LEAK RISK"):
+        with p.rent(_offer(), LAUNCH, timeout_s=5):
+            pass
+
+
+def test_wait_running_bails_on_dead_status(mk):
+    p = mk(FakeRunPod(status="TERMINATED"))
+    with pytest.raises(HostProbeFailed):
+        with p.rent(_offer(), LAUNCH, timeout_s=5):
+            pass
+
+
+def test_rent_tears_down_on_dead_status(mk, tmp_path):
+    """A failed-to-come-up pod is still terminated (no leak) and logged."""
+    led = VastLedger(tmp_path / "l.jsonl")
+    p = mk(FakeRunPod(status="FAILED"), ledger=led)
+    with pytest.raises(HostProbeFailed):
+        with p.rent(_offer(), LAUNCH, timeout_s=5):
+            pass
+    d = next(e for e in led.events() if e["event"] == "destroyed")
+    assert d["outcome"] == "host_failed" and d["verify"] == "gone"
+
+
+def test_read_key_from_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
+    kf = tmp_path / "rp_key"
+    kf.write_text("rpa_filekey\n")
+    monkeypatch.setattr(runpod, "_KEY_PATHS", (str(kf),))
+    assert runpod._read_key() == "rpa_filekey"

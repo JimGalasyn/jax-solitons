@@ -1,16 +1,23 @@
-"""Direct Vast.ai HTTP client for the campaign Executor (stdlib only).
+"""The reference `Provider` (F): a direct Vast.ai HTTP broker (stdlib only).
 
-SkyPilot's Vast provider AND the official `vastai` SDK both break against Vast's
-current API: the bare collection endpoint ``GET /api/v0/instances/`` returns
-HTTP 410 Gone, and both route instance-listing there. Probing showed the rest
-of v0 is alive (``/instances/{id}/`` -> 200), and v1 serves the list. So this
-talks straight to the endpoints that work -- **v1 for listing, v0 sub-resources
-for create/destroy/show/logs** -- with no third-party dependency (urllib only),
+`VastProvider` implements the campaign `Provider` Protocol -- `offers(HostSpec)`
+and a leak-proof `rent(Offer, LaunchSpec)` -- so the campaign can rent Vast GPUs
+behind the same seam any other cloud plugs into. It is also the worked example a
+new adapter (RunPod, TensorDock, EC2 spot) copies.
+
+Why a direct client and not an SDK (P10): SkyPilot's Vast provider AND the
+official `vastai` SDK both break against Vast's current API -- the bare
+collection endpoint ``GET /api/v0/instances/`` returns HTTP 410 Gone, and both
+route instance-listing there. Probing showed the rest of v0 is alive
+(``/instances/{id}/`` -> 200), and v1 serves the list. So this talks straight to
+the endpoints that work -- **v1 for listing, v0 sub-resources for
+create/destroy/show/logs** -- with no third-party dependency (urllib only),
 which also means nothing to break when the SDK lags the API again.
 
-Cost safety is structural: ``rent()`` ALWAYS destroys on exit (success,
-exception, or Ctrl-C) and then verifies via the independent v1 list endpoint
-that the instance is actually gone. A leaked GPU bills by the second.
+Cost safety is structural and IS the Provider contract: ``rent()`` ALWAYS
+destroys on exit (success, exception, or Ctrl-C) and then verifies via the
+independent v1 list endpoint that the instance is actually gone. A leaked GPU
+bills by the second.
 
 API key: ``$VAST_API_KEY``, else ``~/.config/vastai/vast_api_key``, else
 ``~/.vast_api_key`` (the first that exists; see ``_KEY_PATHS``).
@@ -26,6 +33,14 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from jax_solitons.campaign.protocols import (
+    HostProbeFailed,
+    HostSpec,
+    LaunchSpec,
+    Offer,
+    RentedHost,
+)
 
 V0 = "https://console.vast.ai/api/v0"
 V1 = "https://console.vast.ai/api/v1"
@@ -46,9 +61,9 @@ class VastError(RuntimeError):
     """A Vast API call failed (status quoted, key never echoed)."""
 
 
-class HostProbeFailed(VastError):
-    """A rented host failed to come up usable (DNS/image-pull/disk) -- the P9
-    'hosts lie' case. The executor should tear it down and fail over."""
+# `HostProbeFailed` is the campaign-wide failover signal (campaign.protocols),
+# imported above so every Provider raises the SAME exception the executor
+# fails over on -- not a Vast-private subclass.
 
 
 def _read_key(explicit: str | None = None) -> str:
@@ -77,26 +92,6 @@ def _req(method: str, url: str, key: str, payload=None, timeout: float = 30):
     except urllib.error.HTTPError as e:
         detail = e.read()[:200].decode(errors="replace")
         raise VastError(f"{method} {url.split('?')[0]} -> HTTP {e.code}: {detail}")
-
-
-@dataclasses.dataclass(frozen=True)
-class Offer:
-    """A rentable offer (the fields the executor decides on)."""
-
-    id: int
-    dph: float                 # $ per hour, all-in
-    gpu_name: str
-    num_gpus: int
-    reliability: float         # 0..1 (Vast's reliability2)
-    inet_down_mbps: float
-    cuda_max: float
-    geolocation: str
-
-    def __str__(self) -> str:
-        return (f"offer {self.id}: {self.num_gpus}x {self.gpu_name} "
-                f"${self.dph:.3f}/hr  rel={self.reliability:.3f}  "
-                f"down={self.inet_down_mbps:.0f}Mbps  cuda<={self.cuda_max}  "
-                f"[{self.geolocation.strip(', ')}]")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -153,8 +148,16 @@ class VastLedger:
         }
 
 
-class VastClient:
-    """Direct HTTP client for Vast.ai, scoped to what the executor needs."""
+class VastProvider:
+    """The reference `Provider` (F): a direct Vast.ai HTTP broker.
+
+    Implements the campaign `Provider` Protocol (`offers` + leak-proof `rent`)
+    so Vast plugs into the same seam as any other cloud, and is the worked
+    example a new adapter copies. The lower-level lifecycle methods
+    (`create`/`status`/`wait_running`/`logs`/`destroy`) are public for direct
+    operational use but the contract surface is just `offers` and `rent`."""
+
+    name = "vast"
 
     def __init__(self, api_key: str | None = None,
                  ledger: "VastLedger | None" = None):
@@ -166,48 +169,49 @@ class VastClient:
             self.ledger.record(event, **fields)
 
     # -- discovery (free; no spend) ------------------------------------------
-    def offers(self, *, gpu_name: str = "RTX_3090", num_gpus: int = 1,
-               max_dph: float = 0.40, min_reliability: float = 0.95,
-               min_inet_mbps: float = 100.0, min_cuda: float = 12.0) -> list[Offer]:
-        """Rentable offers meeting the bar, cheapest first.
+    def offers(self, spec: HostSpec) -> list[Offer]:
+        """Rentable offers meeting `spec`, cheapest first (the F discovery half).
 
-        These filters are the P9 admission spirit at SELECTION time -- but the
+        The filters are the P9 admission spirit at SELECTION time -- but the
         live failure (a 0.99-reliability host that can't resolve DNS) shows
-        selection metadata is necessary, not sufficient. The executor must still
-        probe-and-bail per host (see wait_running) and fail over to the next."""
+        selection metadata is necessary, not sufficient. `rent` must still
+        probe-and-bail per host (see wait_running) and the executor fails over
+        to the next. `cuda_max_good >= spec.min_cuda` is the P10 gate: a host
+        whose driver is older than the launch image fails container-create, so
+        it is never surfaced."""
         q = {
             "verified": {"eq": True}, "rentable": {"eq": True},
             "rented": {"eq": False},
-            "gpu_name": {"eq": gpu_name.replace("_", " ")},
-            "num_gpus": {"eq": num_gpus},
-            "reliability2": {"gte": min_reliability},
-            "inet_down": {"gte": min_inet_mbps},
-            "cuda_max_good": {"gte": min_cuda},
+            "gpu_name": {"eq": spec.gpu_name.replace("_", " ")},
+            "num_gpus": {"eq": spec.num_gpus},
+            "reliability2": {"gte": spec.min_reliability},
+            "inet_down": {"gte": spec.min_inet_mbps},
+            "cuda_max_good": {"gte": spec.min_cuda},
             "order": [["dph_total", "asc"]], "type": "on-demand",
             "limit": 64, "allocated_storage": 5.0,
         }
         raw = _req("POST", f"{V0}/bundles/", self.key, q).get("offers", [])
         return [
-            Offer(id=int(o["id"]), dph=float(o["dph_total"]), gpu_name=o["gpu_name"],
-                  num_gpus=int(o["num_gpus"]),
+            Offer(id=str(o["id"]), dph=float(o["dph_total"]),
+                  gpu_name=o["gpu_name"], num_gpus=int(o["num_gpus"]),
                   reliability=float(o.get("reliability2", 0)),
                   inet_down_mbps=float(o.get("inet_down", 0)),
                   cuda_max=float(o.get("cuda_max_good", 0)),
-                  geolocation=o.get("geolocation", ""))
-            for o in raw if o.get("dph_total", 1e9) <= max_dph]
+                  geolocation=o.get("geolocation", ""), provider=self.name)
+            for o in raw if o.get("dph_total", 1e9) <= spec.max_dph]
 
-    def cheapest_offer(self, **kw) -> Offer | None:
-        offs = self.offers(**kw)
+    def cheapest_offer(self, spec: HostSpec) -> Offer | None:
+        offs = self.offers(spec)
         return offs[0] if offs else None
 
     # -- lifecycle -----------------------------------------------------------
-    def create(self, offer_id: int, *, image: str, onstart_cmd: str,
+    def create(self, offer_id: int | str, *, image: str, onstart_cmd: str,
                disk: float = 40.0, label: str = "jax-solitons",
                runtype: str = "ssh") -> int:
         """Create an instance from an offer; returns the instance id."""
         blob = {"client_id": "me", "image": image, "env": {}, "disk": disk,
                 "label": label, "onstart": onstart_cmd, "runtype": runtype}
-        res = _req("PUT", f"{V0}/asks/{offer_id}/", self.key, blob)
+        res = _req("PUT", f"{V0}/asks/{int(offer_id)}/", self.key, blob)
         new_id = res.get("new_contract") or res.get("id")
         if not new_id:
             raise VastError(f"create returned no instance id: {res}")
@@ -265,12 +269,11 @@ class VastClient:
     def destroy(self, instance_id: int) -> None:
         _req("DELETE", f"{V0}/instances/{instance_id}/", self.key, {})
 
-    # -- the safety primitive ------------------------------------------------
+    # -- the safety primitive (the Provider F invariant) ---------------------
     @contextlib.contextmanager
-    def rent(self, offer: Offer, *, image: str, onstart_cmd: str,
-             disk: float = 40.0, wait: bool = True, timeout_s: float = 600):
-        """Rent an instance, attempt teardown on exit, and surface any leak
-        risk LOUDLY, logging the full lifecycle to the ledger.
+    def rent(self, offer: Offer, launch: LaunchSpec, *, timeout_s: float = 600):
+        """Rent `offer`, wait until usable, yield a `RentedHost`, and ALWAYS
+        verify-teardown on exit -- the leak-proof contract every Provider owes.
 
         Destroys in a finally block on any exit -- normal, exception, or
         Ctrl-C (retried) -- then independently re-checks the v1 list. If the
@@ -278,21 +281,25 @@ class VastClient:
         be confirmed, it is recorded in the ledger and a confirmed leak / failed
         destroy raises `VastError` rather than passing silently -- a leaked GPU
         bills by the second. `offer` is an Offer (not a bare id) so cost and geo
-        land in the ledger.
+        land in the ledger. Raises `HostProbeFailed` if the host never comes up
+        usable, so the executor can fail over to the next offer.
         """
         t0 = time.monotonic()
-        instance_id = self.create(offer.id, image=image, onstart_cmd=onstart_cmd,
-                                  disk=disk)
+        instance_id = self.create(offer.id, image=launch.image,
+                                   onstart_cmd=launch.onstart, disk=launch.disk_gb)
         self._log("rented", offer_id=offer.id, instance_id=instance_id,
                   gpu=offer.gpu_name, dph=offer.dph, reliability=offer.reliability,
                   geo=offer.geolocation.strip(", "))
         outcome, reason = "ok", ""
         try:
-            if wait:
-                self.wait_running(instance_id, timeout_s=timeout_s)
-                self._log("running", offer_id=offer.id, instance_id=instance_id,
-                          provision_s=round(time.monotonic() - t0, 1))
-            yield instance_id
+            inst = self.wait_running(instance_id, timeout_s=timeout_s)
+            self._log("running", offer_id=offer.id, instance_id=instance_id,
+                      provision_s=round(time.monotonic() - t0, 1))
+            yield RentedHost(
+                id=str(instance_id),
+                ssh_host=str(inst.raw.get("ssh_host") or ""),
+                ssh_port=int(inst.raw.get("ssh_port") or 0),
+                offer=offer, raw=inst.raw)
         except HostProbeFailed as e:
             outcome, reason = "host_failed", str(e)
             raise
@@ -333,3 +340,10 @@ class VastClient:
                     f"LEAK RISK: instance {instance_id} not confirmed torn down "
                     f"(destroyed={destroyed}, verify={verify}) -- "
                     f"run `vastai destroy instance {instance_id}`")
+
+
+# Back-compat import alias: the class was `VastClient` before it implemented the
+# `Provider` Protocol (F). The NAME survives so existing imports don't break, but
+# `offers()` now takes a `HostSpec` and `rent()` a `LaunchSpec` (not loose
+# kwargs) -- callers on the old signatures must update those calls.
+VastClient = VastProvider

@@ -10,14 +10,18 @@ import pytest
 import jax_solitons.campaign.vast as vast
 from jax_solitons.campaign.vast import (
     HostProbeFailed,
+    HostSpec,
+    LaunchSpec,
     Offer,
+    RentedHost,
     VastClient,
     VastError,
     VastLedger,
 )
 
-OFFER = Offer(id=111, dph=0.15, gpu_name="RTX 3090", num_gpus=1, reliability=0.99,
-              inet_down_mbps=900, cuda_max=12.5, geolocation=", CA")
+OFFER = Offer(id="111", dph=0.15, gpu_name="RTX 3090", num_gpus=1, reliability=0.99,
+              inet_down_mbps=900, cuda_max=12.5, geolocation=", CA", provider="vast")
+LAUNCH = LaunchSpec(image="img", onstart="cmd", disk_gb=24)
 
 
 class FakeVast:
@@ -70,15 +74,18 @@ def mk(monkeypatch):
 
 def test_cheapest_offer_filters_by_price(mk):
     o = mk(FakeVast()).cheapest_offer(
-        max_dph=0.30, min_reliability=0.9, min_inet_mbps=100, min_cuda=12.0)
-    assert o.id == 111 and o.dph == 0.15        # 112 ($0.60) filtered out
+        HostSpec(gpu_name="RTX_3090", max_dph=0.30, min_reliability=0.9,
+                 min_inet_mbps=100, min_cuda=12.0))
+    assert o.id == "111" and o.dph == 0.15      # 112 ($0.60) filtered out
+    assert o.provider == "vast"                  # adapter stamps the offer
 
 
 def test_rent_happy_path_destroys_and_verifies_gone(mk, tmp_path):
     led = VastLedger(tmp_path / "l.jsonl")
     c = mk(FakeVast(start_status="running"), ledger=led)
-    with c.rent(OFFER, image="img", onstart_cmd="cmd", timeout_s=5) as iid:
-        assert iid == 9001
+    with c.rent(OFFER, LAUNCH, timeout_s=5) as host:
+        assert isinstance(host, RentedHost) and host.id == "9001"
+        assert host.offer is OFFER               # cost/geo stay attached
     evs = led.events()
     assert {e["event"] for e in evs} == {"rented", "running", "destroyed"}
     d = next(e for e in evs if e["event"] == "destroyed")
@@ -90,7 +97,7 @@ def test_rent_raises_loudly_on_failed_destroy(mk, tmp_path):
     led = VastLedger(tmp_path / "l.jsonl")
     c = mk(FakeVast(start_status="running", destroy_fail=True), ledger=led)
     with pytest.raises(VastError, match="LEAK RISK"):
-        with c.rent(OFFER, image="img", onstart_cmd="cmd", timeout_s=5):
+        with c.rent(OFFER, LAUNCH, timeout_s=5):
             pass
     d = next(e for e in led.events() if e["event"] == "destroyed")
     assert d["destroyed"] is False             # recorded, not silently passed
@@ -100,7 +107,7 @@ def test_rent_raises_when_instance_still_present(mk):
     # destroy "succeeds" but the instance never leaves the list -> confirmed leak
     c = mk(FakeVast(start_status="running", destroy_noop=True))
     with pytest.raises(VastError, match="LEAK RISK"):
-        with c.rent(OFFER, image="img", onstart_cmd="cmd", timeout_s=5):
+        with c.rent(OFFER, LAUNCH, timeout_s=5):
             pass
 
 
@@ -159,7 +166,7 @@ def test_rent_failed_over_host_logs_outcome(mk, tmp_path):
     c = mk(FakeVast(start_status="loading", status_msg="failed to resolve x"),
            ledger=led)
     with pytest.raises(HostProbeFailed):
-        with c.rent(OFFER, image="img", onstart_cmd="cmd", timeout_s=5):
+        with c.rent(OFFER, LAUNCH, timeout_s=5):
             pass
     d = next(e for e in led.events() if e["event"] == "destroyed")
     assert d["outcome"] == "host_failed" and d["verify"] == "gone"

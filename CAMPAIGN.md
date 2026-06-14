@@ -45,6 +45,78 @@ Two verified literature sweeps drive this:
    over (0.99-reliability on paper, unreachable in fact) is **E/P9 demonstrated
    live** — caught by `HostProbeFailed`, logged to the `VastLedger`.
 
+## The F seam: `Provider`, and why serverless isn't one (2026-06-14)
+
+The `VastClient` started as one marketplace's thin client. It is now the
+reference implementation of a **`Provider` Protocol (F)** — `offers(HostSpec)`
+plus a leak-proof `rent(Offer, LaunchSpec)` — so a new cloud (RunPod pods,
+TensorDock, EC2 spot) is a ~150-line adapter against a fixed contract, not a
+fork of the orchestration. This is the same "build thin" call as D, applied
+once more: SkyPilot *adopts* the clouds whose providers work; F *owns* the thin
+broker for the marketplaces whose providers are broken (P10).
+
+Two things make F a real contract and not just an interface:
+
+- **Leak-proof teardown is the invariant, not a nicety.** `rent` is a context
+  manager that destroys the host on *every* exit and independently verifies it
+  is gone, raising on a confirmed leak. An adapter that can't prove teardown
+  doesn't satisfy `Provider`. The contract test drives this with a
+  `FakeProvider` (no spend): teardown fires on success, on exception, and on a
+  `HostProbeFailed` host, and the cheapest-first failover idiom leaves nothing
+  billing.
+- **`HostSpec.min_cuda` is load-bearing (P10).** It must be ≥ the launch
+  image's CUDA floor, or the nvidia-container OCI hook fails at *container
+  create* on any host whose driver is older than the image — a failure that
+  reads as "broken host" but is an image/host mismatch. Measured 2026-06-14: a
+  `cuda:12.4` image hard-failed create on ~16/17 cheap hosts; `cuda:12.2` +
+  `min_cuda=12.2` → 0 failures. The gate now lives in the offer query.
+
+**Serverless backends are not Providers.** Modal and RunPod-serverless have no
+host to rent, no SSH, no teardown to own — you submit a containerized function
+and the platform provisions. They therefore plug in at the **Executor (D)**
+seam (a future `ModalExecutor`), not F. F is exactly the rent-a-box-and-SSH
+markets; the line is "is there a host whose meter *I* must turn off?".
+
+**VM marketplaces are out of scope (evaluated 2026-06-14).** TensorDock is a
+rent-a-box market that *would* be a Provider — except it deploys **VMs, not
+containers**: `LaunchSpec.image` would be an OS slug (`ubuntu2404`) not a docker
+ref, there's no container entrypoint, and bootstrap must run over SSH post-boot.
+Rather than overload `LaunchSpec` with two meanings (docker ref vs OS image) and
+two bootstrap paths, the Provider seam stays **container-based** (docker image +
+onstart entrypoint) — the shape Vast and RunPod share. A VM marketplace is
+deferred until there's a clear need; if one lands, it argues for a distinct
+VM-provider type, not a broadened `LaunchSpec`.
+
+**Second adapter — the rule-of-three test (2026-06-14).** `RunPodProvider`
+(`runpod.py`) is a second cloud behind the same seam, and it held — but it
+flexed the Protocol in exactly the places a one-marketplace abstraction would
+have hard-coded, which is the point of building it:
+
+- **Offers are GPU *types*, not hosts.** RunPod's REST API is pod-centric with
+  no host catalog; the type list + pricing is in its *GraphQL* API. So
+  `offers()` returns one synthetic `Offer` per (type, cloud-tier), `id` = the
+  gpuTypeId, and `rent()` asks RunPod to *place* a pod rather than pick a named
+  machine. Per-host reliability/inet aren't in the catalog → NaN (honest
+  "unknown"), not a faked number.
+- **Admission splits across `offers`/`rent`.** Vast filters everything at
+  selection; RunPod resolves the CUDA floor and bandwidth at pod *create*
+  (`allowedCudaVersions`, `minDownloadMbps`). So `HostSpec.min_cuda` is honored
+  at rent for RunPod, at selection for Vast — same intent, different seam half.
+- **Cloudflare UA footgun.** RunPod's API 403s the default `Python-urllib` User-
+  Agent (Cloudflare error 1010); any explicit UA clears it. Vast had no such
+  filter. Encoded in `runpod._req`.
+
+The shared `Offer`/`RentedHost`/`HostSpec`/`LaunchSpec` types and the leak-proof
+`rent` contract needed **zero changes** to absorb all three — the seam was drawn
+right. Both adapters are stdlib-only (urllib) and CI-tested against a mocked
+HTTP layer (no spend); `offers()` was also validated live against each cloud's
+real catalog.
+
+The `ProviderExecutor` that drives *any* `Provider` from `run_campaign` is the
+next step (it ships configs + a worker, since `Executor.run` takes opaque thunks
+a remote box can't receive — see TODO.md collider-campaign item 4). This change
+lands the F contract + **two** reference adapters + their tests.
+
 ## The contract → DESIGN.md principles
 
 | Letter | Protocol | Responsibility | Principle |
@@ -53,6 +125,7 @@ Two verified literature sweeps drive this:
 | C | `EventSink` | stream small per-run records; capture full fields only when triggered | P6, P7 |
 | D | `Executor` | fan out tasks over a fleet; recover from preemption (re-submit incomplete) | adopted |
 | E | `Admission` | probe a host's real compute+network capacity; bail loudly on bad hosts | P9 |
+| F | `Provider` | pluggable cloud broker: list offers, rent one, **leak-proof teardown** | P9, P10 |
 
 A/B already live in `runs.py` (`RunConfig.config_hash`, `save_checkpoint`,
 `load_checkpoint`) — they are *already physics-agnostic*. The campaign module
@@ -91,9 +164,11 @@ version-lock friction and a guessed-at abstraction.
 
 `protocols.py` is the contract; `reference.py` has thin local-machine
 implementations (functional) plus a `SkyPilotExecutor` stub (documents the
-intended mapping, raises `NotImplementedError`). The local/reference path is
-**CI-gated** — `tests/test_campaign.py` drives the A/B/C/E contract end-to-end
-(including the relax-then-ID `RunFn` and bit-identical resume) under the default
-`pytest` job; only the SkyPilot executor remains stubbed. The boundary is drawn
-and tested, so the collider-campaign work (TODO.md) builds against a fixed,
-exercised contract.
+intended mapping, raises `NotImplementedError`); `vast.py` is the reference
+`Provider` (F). The local/reference path is **CI-gated** —
+`tests/test_campaign.py` drives the A/B/C/E contract end-to-end (including the
+relax-then-ID `RunFn` and bit-identical resume) and the F contract via a
+zero-spend `FakeProvider` (leak-proof teardown on success/exception/bad-host +
+failover) under the default `pytest` job; only the SkyPilot executor and the
+`ProviderExecutor` wiring remain to build. The boundary is drawn and tested, so
+the collider-campaign work (TODO.md) builds against a fixed, exercised contract.
