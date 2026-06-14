@@ -171,6 +171,36 @@ def test_rent_tears_down_on_dead_status(mk, tmp_path):
     assert d["outcome"] == "host_failed" and d["verify"] == "gone"
 
 
+def test_create_retries_transient_capacity(monkeypatch):
+    """A 'does not have the resources / try a different machine' 500 is transient
+    capacity -> retried (each attempt may land on a different machine)."""
+    monkeypatch.setattr(runpod.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def fake_req(method, url, key, payload=None, timeout=30):
+        if method == "POST" and url.endswith("/pods"):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RunPodError("POST .../pods -> HTTP 500: create pod: This "
+                                  "machine does not have the resources to deploy "
+                                  "your pod. Please try a different machine")
+            return {"id": "pod9"}
+        return {}
+    monkeypatch.setattr(runpod, "_req", fake_req)
+    p = RunPodProvider(api_key="k")
+    assert p.create(_offer(), LAUNCH) == "pod9" and calls["n"] == 3
+
+
+def test_create_raises_immediately_on_non_capacity_error(monkeypatch):
+    monkeypatch.setattr(runpod.time, "sleep", lambda s: None)
+
+    def fake_req(method, url, key, payload=None, timeout=30):
+        raise RunPodError("POST .../pods -> HTTP 401: unauthorized")
+    monkeypatch.setattr(runpod, "_req", fake_req)
+    with pytest.raises(RunPodError, match="401"):
+        RunPodProvider(api_key="k").create(_offer(), LAUNCH)
+
+
 def test_read_key_from_file(tmp_path, monkeypatch):
     monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
     kf = tmp_path / "rp_key"

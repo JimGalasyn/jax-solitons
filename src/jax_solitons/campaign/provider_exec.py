@@ -61,8 +61,6 @@ def _scp_down(key: str, host: str, port: int, remote: str, local: str,
 class ProviderExecutor:
     """Run a campaign over hosts rented from a `Provider`, with failover."""
 
-    name = "provider"
-
     def __init__(self, provider: Provider, run_fn_ref: RunFnRef,
                  launch: LaunchSpec, *, host_spec: HostSpec | None = None,
                  key_path: str = DEFAULT_KEY,
@@ -72,6 +70,9 @@ class ProviderExecutor:
                  ready_timeout: float = 900, run_timeout: float = 3600,
                  rent_timeout: float = 600):
         self.provider = provider
+        # Distinct per backing provider so a multi-provider harvest can tell
+        # Vast from RunPod (both are ProviderExecutors): "provider:vast" etc.
+        self.name = f"provider:{getattr(provider, 'name', 'unknown')}"
         self.run_fn_ref = run_fn_ref
         self.launch = launch
         self.host_spec = host_spec or HostSpec()

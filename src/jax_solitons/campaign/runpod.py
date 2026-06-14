@@ -186,8 +186,14 @@ class RunPodProvider:
         floor = self._min_cuda or 0.0
         return [v for v in _CUDA_LADDER if float(v) >= floor]
 
-    def create(self, offer: Offer, launch: LaunchSpec) -> str:
-        """Create (place) a pod of `offer`'s GPU type; returns the pod id."""
+    def create(self, offer: Offer, launch: LaunchSpec, *, attempts: int = 6) -> str:
+        """Create (place) a pod of `offer`'s GPU type; returns the pod id.
+
+        RunPod picks a machine at create time and can 500 with 'does not have the
+        resources ... try a different machine' when the chosen host is full. That
+        is transient capacity, not a bad request, and each retry may land on a
+        different machine -- so retry it (unlike RunPod's per-type catalog, which
+        gives the executor nothing to fail over to). Other errors propagate."""
         body = {
             "name": "jax-solitons",
             "imageName": launch.image,
@@ -207,11 +213,22 @@ class RunPodProvider:
             body["minDownloadMbps"] = self._min_inet
         if self.data_center_ids:
             body["dataCenterIds"] = self.data_center_ids
-        res = _req("POST", f"{REST}/pods", self.key, body)
-        pid = res.get("id")
-        if not pid:
-            raise RunPodError(f"create returned no pod id: {str(res)[:160]}")
-        return str(pid)
+        last = ""
+        for _ in range(attempts):
+            try:
+                res = _req("POST", f"{REST}/pods", self.key, body)
+                pid = res.get("id")
+                if pid:
+                    return str(pid)
+                last = f"no pod id: {str(res)[:160]}"
+            except RunPodError as e:
+                last = str(e)
+                low = last.lower()
+                if "resource" not in low and "try a different machine" not in low:
+                    raise                        # a real error, not capacity
+            time.sleep(3)
+        raise RunPodError(
+            f"create failed after {attempts} attempts (capacity?): {last[:200]}")
 
     def status(self, pod_id: str) -> dict:
         return _req("GET", f"{REST}/pods/{pod_id}", self.key)
