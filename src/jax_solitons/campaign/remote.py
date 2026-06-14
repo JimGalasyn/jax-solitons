@@ -47,6 +47,13 @@ def run_one(config_json: str, run_fn_ref: RunFnRef, work_dir: str) -> dict:
     Full artifacts (checkpoints, events, triggered captures) stay in `work_dir`.
     """
     config = RunConfig.from_json(config_json)
+    # Honor the config dtype on a fresh worker: jax defaults to x32, and x64
+    # must be enabled before any array is created. In-process callers set this
+    # themselves; a remote worker is a clean process, so do it here -- else a
+    # float64 config silently runs in float32 on the box.
+    if config.dtype == "float64":
+        import jax
+        jax.config.update("jax_enable_x64", True)
     run_fn = load_run_fn(run_fn_ref)
     registry = FileRunRegistry(work_dir)
     sink = JsonlEventSink()
