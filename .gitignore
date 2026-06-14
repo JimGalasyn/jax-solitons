@@ -11,3 +11,4 @@ output/
 # coverage artifacts
 .coverage
 coverage.xml
+campaign_out/
