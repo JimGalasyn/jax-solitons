@@ -7,7 +7,23 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-06-15
+
 ### Added
+- **Core-curve knot ID (`jax_solitons.knots`)** — the inverse of the carrier
+  ladder: given a soliton field, trace its core curve (predictor-corrector on the
+  implicit `{n1=0, n2=0}` / `{Re ψ=0, Im ψ=0}` set) and read off the Alexander
+  determinant via pyknotid (unknot=1, trefoil=3, cinquefoil=5, …). Includes
+  `core_curves_from_n` / `core_curves_from_psi`, `identify_knot` /
+  `identify_core_knot`, `curve_energy_scores`, `trace_implicit_curve`, and a
+  `with_time_limit` guard (the pure-Python tracer/Alexander can go pathological on
+  turbulent evolved fields).
+- **Coupled L₂ + L₃ gauged Faddeev–Skyrme–Higgs model** (`models.gauged_faddeev`,
+  Paper 16 L_NWT) — an SU(2) Skyrme field slaved to a C² doublet with a U(1)
+  gauge + Higgs sector; `gauged_faddeev_model` and `n_from_doublet` recover the
+  Skyrme field for the shared relax-then-ID.
+- **Torus-knot seeds** — `torus_knot_hopfion` (T(p,q) hopfion, Q_H = p·m) and
+  `flux_threaded_knot_seed` (the gauged-model knot IC).
 - **Campaign `Provider` seam (F)** — a pluggable cloud-broker Protocol, so a new
   GPU cloud is a ~150-line adapter rather than a fork. Adds the `Provider`
   Protocol and shared `HostSpec` / `Offer` / `RentedHost` / `LaunchSpec` types
@@ -56,6 +72,23 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   `offers()` takes a `HostSpec` and `rent()` takes a `LaunchSpec` (previously
   loose keyword arguments), and `Offer.id` is now a string. A `VastClient` alias
   is kept for import compatibility, but these method signatures changed.
+- **`knots.identify_knot` / `identify_core_knot` resample default `600 → 200`.**
+  600 still went combinatorial on jittery evolved curves when pyknotid's cython
+  chelpers are absent (the common case); 200 resolves every torus knot through
+  T(2,9) on noisy traces in <1 s. `identify_core_knot` now also forwards
+  `max_points`. Raise it for genuinely high-crossing curves.
+
+### Fixed
+- **`knots.core_curves_from_n` now auto-detects the anti-vacuum pole** (new
+  default `pole="auto"` = `-sign(mean n3)`). It was hard-coded `pole=+1` (assumes
+  vacuum at −z), but the library's own `torus_knot_hopfion` + `arrested_flow`
+  leave the vacuum at +z — so the tracer seeded on the entire +z vacuum bulk
+  (~millions of points) and hung for hours. The library was internally
+  inconsistent: the fields it generates tripped the knot-ID it ships. Auto-detect
+  is convention-agnostic (vacuum −z → +1, +z → −1), falls back to the opposite
+  pole on a degenerate one-pole field, and raises `ValueError` for any pole other
+  than `"auto"`/±1. Likely the root of the "census on evolved fields blocked"
+  wall. (#19)
 
 ### Notes
 - The seam is deliberately scoped to **rent-a-box container marketplaces**.

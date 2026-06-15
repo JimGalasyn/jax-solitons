@@ -217,9 +217,10 @@ def core_curves_from_n(n1, n2, n3, axes, pole="auto", extra_mask=None, **kw):
     The core is the ANTI-vacuum pole: the soliton sits at whichever pole the bulk
     vacuum does NOT occupy. Curve: {n1=0, n2=0} on the n3*pole>0 sheet.
 
-    pole="auto" (default) detects it from the field: pole = -sign(mean n3), so a
-    +z vacuum (mean n3 > 0) -> trace the -z sheet, and vice-versa. This is
-    convention-agnostic: a vacuum at -z gives pole +1 (the historical default),
+    pole="auto" (default) detects it from the field: pole = -1 when mean(n3) > 0
+    (a +z vacuum -> trace the -z sheet) else +1 (so the mean(n3) == 0 tie maps to
+    +1 deterministically -- a strict > test, not sign(), which would give 0). This
+    is convention-agnostic: a vacuum at -z gives pole +1 (the historical default),
     while torus_knot_hopfion + arrested_flow leave the vacuum at +z and need
     pole -1. The old hard default pole=+1 silently traced the ENTIRE +z-vacuum
     bulk (~millions of seed points) on the latter -> hour-long tracer hangs.
