@@ -184,6 +184,11 @@ JAX_ENABLE_X64=1 python examples/faddeev_campaign.py   # writes _campaign_out/
 
 ## Releasing
 
+Version history: [`CHANGELOG.md`](CHANGELOG.md) (structured) and
+[`docs/releases/`](docs/releases/) (narrative release notes, latest
+[`v0.0.3`](docs/releases/v0.0.3.md) — knot ID, the gauged L₂+L₃ model, and the
+anti-vacuum pole fix).
+
 Maintainers: the runbook for cutting a tagged, Zenodo-archived release is
 [docs/RELEASING.md](docs/RELEASING.md) (version bump → PR → GitHub Release →
 `scripts/zenodo_release.py` → DOI backfill).
