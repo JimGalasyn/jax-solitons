@@ -80,7 +80,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 - **`knots.core_curves_from_n` now auto-detects the anti-vacuum pole** (new
-  default `pole="auto"` = `-sign(mean n3)`). It was hard-coded `pole=+1` (assumes
+  default `pole="auto"`: `-1` when `mean(n3) > 0`, else `+1` — a strict test, so
+  the `mean(n3) == 0` tie maps deterministically to `+1`). It was hard-coded
+  `pole=+1` (assumes
   vacuum at −z), but the library's own `torus_knot_hopfion` + `arrested_flow`
   leave the vacuum at +z — so the tracer seeded on the entire +z vacuum bulk
   (~millions of points) and hung for hours. The library was internally
