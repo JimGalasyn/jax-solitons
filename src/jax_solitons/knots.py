@@ -70,13 +70,16 @@ def _resample_closed(pts, n):
     return np.stack([np.interp(si, s, closed[:, k]) for k in range(3)], axis=1)
 
 
-def identify_knot(points, max_points=600) -> dict:
+def identify_knot(points, max_points=200) -> dict:
     """Knot determinant + carrier label for an ordered (M,3) closed polyline.
 
     Curves are resampled down to max_points before pyknotid: a noisy tracer
     output (thousands of jittery points) inflates the crossing count and the
     pure-Python Alexander computation goes combinatorial (observed: hour-long
-    hangs on evolved fields). length/n_points report the ORIGINAL curve.
+    hangs on evolved fields). The default 200 resolves every torus knot through
+    T(2,9) on noisy traces in <1s WITHOUT pyknotid's cython chelpers (the common
+    case); 600 was insufficient -- it still hung. Raise it for genuinely
+    high-crossing curves. length/n_points report the ORIGINAL curve.
     """
     pts = np.asarray(points, float)
     if len(pts) < 4:
@@ -208,14 +211,28 @@ def trace_implicit_curve(g1, g2, axes, mask=None, h=None, seed_tol=0.30,
 
 
 # -- field-specific front ends -------------------------------------------------
-def core_curves_from_n(n1, n2, n3, axes, pole=+1, extra_mask=None, **kw):
+def core_curves_from_n(n1, n2, n3, axes, pole="auto", extra_mask=None, **kw):
     """Core curves = preimage of the pole (0,0,pole) of the Faddeev map n:R^3->S^2.
 
-    Default pole=+1 (north) = the anti-vacuum point where the soliton sits
-    (vacuum is the south pole -z). Curve: {n1=0, n2=0} on the n3*pole>0 sheet.
-    extra_mask restricts seeding (e.g. a sphere around one daughter's centroid).
+    The core is the ANTI-vacuum pole: the soliton sits at whichever pole the bulk
+    vacuum does NOT occupy. Curve: {n1=0, n2=0} on the n3*pole>0 sheet.
+
+    pole="auto" (default) detects it from the field: pole = -sign(mean n3), so a
+    +z vacuum (mean n3 > 0) -> trace the -z sheet, and vice-versa. This is
+    convention-agnostic: a vacuum at -z gives pole +1 (the historical default),
+    while torus_knot_hopfion + arrested_flow leave the vacuum at +z and need
+    pole -1. The old hard default pole=+1 silently traced the ENTIRE +z-vacuum
+    bulk (~millions of seed points) on the latter -> hour-long tracer hangs.
+    Pass pole=+1/-1 to force. extra_mask restricts seeding (e.g. a sphere around
+    one daughter's centroid).
     """
     n1, n2, n3 = (np.asarray(x, float) for x in (n1, n2, n3))
+    if pole == "auto":
+        pole = -1 if float(np.mean(n3)) > 0.0 else +1   # anti-vacuum; mean 0 -> +1
+        if not np.any(pole * n3 > 0.0):   # degenerate field fills one pole entirely
+            pole = -pole
+    elif pole not in (1, -1):
+        raise ValueError(f"pole must be 'auto', +1, or -1; got {pole!r}")
     m = pole * n3 > 0.0
     if extra_mask is not None:
         m = m & extra_mask
@@ -274,17 +291,20 @@ def curve_energy_scores(curves, e_density, axes):
     return scores
 
 
-def identify_core_knot(curves, scores=None) -> dict:
+def identify_core_knot(curves, scores=None, max_points=200) -> dict:
     """Identify the dominant core curve's knot; report components.
 
     Dominant = argmax(scores) when given (e.g. curve_energy_scores), else the
-    longest curve (the tracer's ordering).
+    longest curve (the tracer's ordering). max_points is forwarded to
+    identify_knot (resample cap before pyknotid; lower it -- e.g. 150 -- when the
+    cython chelpers are unavailable and a jittery evolved curve makes the
+    pure-Python Alexander routine go combinatorial).
     """
     if not curves:
         return dict(determinant=0, carrier="no core found", n_components=0,
                     n_points=0, length=0.0)
     idx = int(np.argmax(scores)) if scores is not None else 0
-    info = identify_knot(curves[idx])
+    info = identify_knot(curves[idx], max_points=max_points)
     info["n_components"] = len(curves)
     info["dominant"] = idx
     return info

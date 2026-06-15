@@ -101,6 +101,35 @@ def test_core_curves_from_n_traces_circle():
     assert abs(np.linalg.norm(max(loops, key=len)[:, :2], axis=1).mean() - R) < 0.3
 
 
+def test_core_curves_from_n_auto_pole_plusz_vacuum():
+    """+z-vacuum field (the jax-solitons torus_knot_hopfion/arrested_flow
+    convention): the core ring sits at the -z pole, so pole='auto' must detect
+    pole=-1 and trace it. The old hard default pole=+1 traced the empty +z bulk
+    and found nothing -- the bug this fix closes."""
+    N, L, R = 48, 8.0, 2.0
+    ax = np.linspace(-L / 2, L / 2, N, endpoint=False)
+    X, Y, Z = np.meshgrid(ax, ax, ax, indexing="ij")
+    rho = np.sqrt(X**2 + Y**2)
+    d = np.sqrt((rho - R) ** 2 + Z**2)            # distance to ring {Z=0, rho=R}
+    n3 = 1.0 - 2.0 * np.exp(-(d / 0.6) ** 2)      # +1 bulk, dips to -1 on the ring
+    assert n3.mean() > 0.0                          # vacuum is +z
+    loops = core_curves_from_n(Z, rho - R, n3, (ax, ax, ax), seed_tol=0.30)
+    assert loops                                    # auto -> pole=-1 finds the ring
+    assert abs(np.linalg.norm(max(loops, key=len)[:, :2], axis=1).mean() - R) < 0.3
+    # the historical default would have missed it (traces the +z vacuum sheet):
+    assert not core_curves_from_n(Z, rho - R, n3, (ax, ax, ax), pole=+1,
+                                  seed_tol=0.30)
+
+
+def test_core_curves_from_n_rejects_bad_pole():
+    """An invalid pole must fail loudly up front, not cryptically at pole*n3."""
+    ax = np.linspace(-1, 1, 8, endpoint=False)
+    z = np.zeros((8, 8, 8))
+    for bad in (0, 2, "north", None):
+        with pytest.raises(ValueError):
+            core_curves_from_n(z, z, z, (ax, ax, ax), pole=bad)
+
+
 def test_curve_energy_scores_is_a_line_integral():
     """Uniform energy density -> a curve's score is ~ its length (circumference)."""
     N, L, R = 48, 8.0, 2.0
