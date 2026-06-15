@@ -36,12 +36,19 @@ _AUTH = ("401", "403", "forbidden", "unauthor")
 
 
 def leaked_ids(ledger_path: str | Path) -> set[int]:
-    """Instance ids a ledger rented/saw-running but never recorded destroyed.
+    """Instance ids a ledger rented/saw-running but never CONFIRMED destroyed.
 
     Pure (no network): the suspect set to intersect with what's actually live.
+    A ``destroyed`` event only clears a leak when it is a *confirmed* teardown
+    (``verify == "gone"``) -- the leak-proof rent() also logs a ``destroyed``
+    event when teardown FAILED (``verify == "present"`` / ``destroyed: false``),
+    and counting those as gone would make ledger-scoped reaping miss exactly the
+    leaks it exists to catch. Erring toward "still leaked" is safe: reap()
+    intersects this set with what's actually live, so a box that really is gone
+    just won't be a target. Non-numeric ids (other providers) are skipped.
     """
     seen: set[int] = set()
-    destroyed: set[int] = set()
+    confirmed_gone: set[int] = set()
     p = Path(ledger_path)
     if not p.exists():
         return set()
@@ -56,12 +63,16 @@ def leaked_ids(ledger_path: str | Path) -> set[int]:
         iid = ev.get("instance_id")
         if iid is None:
             continue
-        iid = int(iid)
-        if ev.get("event") in ("rented", "running"):
+        try:
+            iid = int(iid)
+        except (TypeError, ValueError):
+            continue                                    # string ids (other providers)
+        evt = ev.get("event")
+        if evt in ("rented", "running"):
             seen.add(iid)
-        elif ev.get("event") == "destroyed":
-            destroyed.add(iid)
-    return seen - destroyed
+        elif evt == "destroyed" and ev.get("verify") == "gone":
+            confirmed_gone.add(iid)                     # only a verified teardown clears it
+    return seen - confirmed_gone
 
 
 def _classify(exc: Exception) -> str:
