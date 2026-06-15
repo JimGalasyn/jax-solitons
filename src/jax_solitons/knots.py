@@ -70,13 +70,16 @@ def _resample_closed(pts, n):
     return np.stack([np.interp(si, s, closed[:, k]) for k in range(3)], axis=1)
 
 
-def identify_knot(points, max_points=600) -> dict:
+def identify_knot(points, max_points=200) -> dict:
     """Knot determinant + carrier label for an ordered (M,3) closed polyline.
 
     Curves are resampled down to max_points before pyknotid: a noisy tracer
     output (thousands of jittery points) inflates the crossing count and the
     pure-Python Alexander computation goes combinatorial (observed: hour-long
-    hangs on evolved fields). length/n_points report the ORIGINAL curve.
+    hangs on evolved fields). The default 200 resolves every torus knot through
+    T(2,9) on noisy traces in <1s WITHOUT pyknotid's cython chelpers (the common
+    case); 600 was insufficient -- it still hung. Raise it for genuinely
+    high-crossing curves. length/n_points report the ORIGINAL curve.
     """
     pts = np.asarray(points, float)
     if len(pts) < 4:
@@ -225,9 +228,11 @@ def core_curves_from_n(n1, n2, n3, axes, pole="auto", extra_mask=None, **kw):
     """
     n1, n2, n3 = (np.asarray(x, float) for x in (n1, n2, n3))
     if pole == "auto":
-        pole = -1 if float(np.mean(n3)) > 0.0 else +1
+        pole = -1 if float(np.mean(n3)) > 0.0 else +1   # anti-vacuum; mean 0 -> +1
         if not np.any(pole * n3 > 0.0):   # degenerate field fills one pole entirely
             pole = -pole
+    elif pole not in (1, -1):
+        raise ValueError(f"pole must be 'auto', +1, or -1; got {pole!r}")
     m = pole * n3 > 0.0
     if extra_mask is not None:
         m = m & extra_mask
@@ -286,7 +291,7 @@ def curve_energy_scores(curves, e_density, axes):
     return scores
 
 
-def identify_core_knot(curves, scores=None, max_points=600) -> dict:
+def identify_core_knot(curves, scores=None, max_points=200) -> dict:
     """Identify the dominant core curve's knot; report components.
 
     Dominant = argmax(scores) when given (e.g. curve_energy_scores), else the

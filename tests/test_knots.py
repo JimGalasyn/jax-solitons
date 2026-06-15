@@ -121,6 +121,15 @@ def test_core_curves_from_n_auto_pole_plusz_vacuum():
                                   seed_tol=0.30)
 
 
+def test_core_curves_from_n_rejects_bad_pole():
+    """An invalid pole must fail loudly up front, not cryptically at pole*n3."""
+    ax = np.linspace(-1, 1, 8, endpoint=False)
+    z = np.zeros((8, 8, 8))
+    for bad in (0, 2, "north", None):
+        with pytest.raises(ValueError):
+            core_curves_from_n(z, z, z, (ax, ax, ax), pole=bad)
+
+
 def test_curve_energy_scores_is_a_line_integral():
     """Uniform energy density -> a curve's score is ~ its length (circumference)."""
     N, L, R = 48, 8.0, 2.0
