@@ -228,6 +228,20 @@ def test_reap_string_ids_ledger_scope(tmp_path):
     assert p.destroyed == ["pod-a"]
 
 
+def test_make_provider_routes_by_name(monkeypatch):
+    """_make_provider picks the adapter by name, lazily (no key needed in test)."""
+    import pytest
+    import jax_solitons.campaign.runpod as runpod
+    import jax_solitons.campaign.vast as vast
+    from jax_solitons.campaign import reap as reapmod
+    monkeypatch.setattr(vast, "VastProvider", lambda: "VAST")
+    monkeypatch.setattr(runpod, "RunPodProvider", lambda: "RUNPOD")
+    assert reapmod._make_provider("vast") == "VAST"
+    assert reapmod._make_provider("runpod") == "RUNPOD"
+    with pytest.raises(ValueError, match="unknown --provider"):
+        reapmod._make_provider("azure")
+
+
 def test_main_provider_runpod_routes_via_factory(monkeypatch, tmp_path):
     """--provider runpod reaps through the (mocked) RunPod provider, string ids."""
     from jax_solitons.campaign import reap as reapmod
