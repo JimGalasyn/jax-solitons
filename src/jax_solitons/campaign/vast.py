@@ -148,7 +148,8 @@ def _req(method: str, url: str, key: str, payload=None, timeout: float = 30,
                 raise VastError(
                     f"{method} {endpoint} -> {type(e).__name__}: {reason}") from e
         time.sleep(min(_BACKOFF_CAP, _BACKOFF_BASE * (2 ** attempt)))
-    raise VastError(f"{method} {endpoint} failed after {tries} tries")  # unreachable
+    raise VastError(  # pragma: no cover  (loop returns or raises every path)
+        f"{method} {endpoint} failed after {tries} tries")
 
 
 @dataclasses.dataclass(frozen=True)

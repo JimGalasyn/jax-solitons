@@ -287,6 +287,16 @@ def test_req_nonidempotent_still_retries_dns(monkeypatch, no_sleep):
     assert len(no_sleep) == 1
 
 
+def test_req_retries_bare_timeout_then_raises_with_reason(monkeypatch, no_sleep):
+    """A bare TimeoutError (not wrapped in URLError) is transient for an
+    idempotent call; on exhaustion it surfaces as VastError naming the cause."""
+    monkeypatch.setattr(vast.urllib.request, "urlopen",
+                        _seq_urlopen([TimeoutError("read timed out")] * 3))
+    with pytest.raises(VastError, match="TimeoutError"):
+        vast._req("GET", "https://x/api/v1/instances/", "k", tries=3)
+    assert len(no_sleep) == 2                          # 3 tries -> 2 backoffs
+
+
 def test_launch_label_is_passed_to_create(mk):
     """LaunchSpec.label stamps the rented instance so reap can scope by label."""
     fake = FakeVast(start_status="running")
