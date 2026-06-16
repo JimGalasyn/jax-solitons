@@ -5,12 +5,20 @@ on:
     branches: [main]
   pull_request:
 
+# Minimal default GITHUB_TOKEN scope: the test job only checks out + uploads
+# coverage (which uses its own CODECOV_TOKEN). Limits blast radius if a job ever
+# runs on the self-hosted runner.
+permissions:
+  contents: read
+
 jobs:
   test:
-    # Self-hosted runner on technozoic_00 (ssdnodes). The 'nwt' label pins it to
-    # our box specifically. Fork-PR code is gated: Settings -> Actions requires
-    # approval for ALL outside collaborators before any workflow runs.
-    runs-on: [self-hosted, nwt]
+    # Self-hosted runner on technozoic_00 (ssdnodes, label 'nwt') for push +
+    # same-repo PRs. FORK PRs fall back to GitHub-hosted ubuntu-latest, so
+    # untrusted fork code never executes on our box -- in-code gating that does
+    # not depend on the repo "require approval for outside collaborators" UI
+    # setting (kept as defence in depth).
+    runs-on: ${{ (github.event.pull_request.head.repo.fork && fromJSON('["ubuntu-latest"]')) || fromJSON('["self-hosted", "nwt"]') }}
     strategy:
       matrix:
         python-version: ["3.10", "3.12"]
