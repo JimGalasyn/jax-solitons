@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# One self-hosted runner -> cancel superseded runs of the same ref so pushes
+# don't pile up ~20-min jobs behind each other.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # Minimal default GITHUB_TOKEN scope: the test job only checks out + uploads
 # coverage (which uses its own CODECOV_TOKEN). Limits blast radius if a job ever
 # runs on the self-hosted runner.
