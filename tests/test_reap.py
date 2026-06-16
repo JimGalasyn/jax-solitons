@@ -1,22 +1,29 @@
 """Reaper logic: ledger-diff, targeting, idempotent/classified destroy. No network."""
 import json
+import time
 
 
 class _Inst:
-    def __init__(self, id, status="running", dph=0.1, label=None):
+    def __init__(self, id, status="running", dph=0.1, label=None, age_s=None):
         self.id = id; self.status = status; self.dph = dph
+        self.raw = {}
         # `is not None` so an explicit empty label is preserved (mirrors the real
         # provider record), not dropped like a falsy value.
-        self.raw = {"label": label} if label is not None else {}
+        if label is not None:
+            self.raw["label"] = label
+        if age_s is not None:                            # start_date = now - age
+            self.raw["start_date"] = time.time() - age_s
 
 
 class _FakeProvider:
     """list_instances + destroy. `errors` maps id -> list of exceptions raised on
-    successive destroy calls (then it succeeds). `labels` maps id -> LaunchSpec
-    label (for --label scope). Records every attempt."""
-    def __init__(self, ids, errors=None, labels=None):
-        labels = labels or {}
-        self._live = {i: _Inst(i, label=labels.get(i)) for i in ids}
+    successive destroy calls (then it succeeds). `labels` / `ages` map id ->
+    LaunchSpec label / age-in-seconds (for --label / --older-than). Records every
+    attempt."""
+    def __init__(self, ids, errors=None, labels=None, ages=None):
+        labels = labels or {}; ages = ages or {}
+        self._live = {i: _Inst(i, label=labels.get(i), age_s=ages.get(i))
+                      for i in ids}
         self.destroyed = []
         self.attempts = []          # every destroy call (incl. failed)
         self.list_calls = 0
@@ -135,6 +142,47 @@ def test_reap_label_and_ledger_intersect(tmp_path):
     assert rep["destroyed"] == [10]
 
 
+# -- age filter / helpers (issue #39) -----------------------------------------
+def test_reap_older_than_keeps_only_aged():
+    from jax_solitons.campaign.reap import reap
+    p = _FakeProvider([10, 11], ages={10: 8 * 3600, 11: 600})   # 8h vs 10min
+    rep = reap(p, older_than=6 * 3600, dry_run=False)
+    assert rep["destroyed"] == [10]                  # young one spared
+
+
+def test_reap_unknown_age_is_never_age_reaped():
+    from jax_solitons.campaign.reap import reap
+    p = _FakeProvider([10])                           # no age set -> unknown
+    rep = reap(p, older_than=3600, dry_run=False)
+    assert rep["targeted"] == 0 and rep["destroyed"] == []
+
+
+def test_reap_label_and_older_than_intersect():
+    from jax_solitons.campaign.reap import reap
+    p = _FakeProvider([10, 11, 12],
+                      labels={10: "f", 11: "f", 12: "g"},
+                      ages={10: 8 * 3600, 11: 600, 12: 8 * 3600})
+    # label f -> {10,11}; older 6h -> {10,12}; intersect -> {10}
+    rep = reap(p, label="f", older_than=6 * 3600, dry_run=False)
+    assert rep["destroyed"] == [10]
+
+
+def test_parse_duration_units():
+    from jax_solitons.campaign.reap import _parse_duration
+    assert _parse_duration("90s") == 90
+    assert _parse_duration("30m") == 1800
+    assert _parse_duration("6h") == 21600
+    assert _parse_duration("2d") == 172800
+    assert _parse_duration("45") == 45             # bare number = seconds
+
+
+def test_instance_age_reads_start_or_none():
+    from jax_solitons.campaign.reap import _instance_age_s
+    assert _instance_age_s(_Inst(1, age_s=7200)) >= 7199        # ~2h
+    assert _instance_age_s(_Inst(1)) is None                    # no start field
+    assert _instance_age_s(object()) is None                    # no raw attr
+
+
 def test_reap_reuses_prefetched_live_no_extra_list_call():
     from jax_solitons.campaign.reap import reap
     p = _FakeProvider([10])
@@ -189,14 +237,37 @@ def _patch_provider(monkeypatch, provider):
     monkeypatch.setattr(vast, "VastProvider", lambda: provider)
 
 
-def test_main_label_scope_destroys_only_that_label(monkeypatch, capsys):
+def test_main_unfiltered_label_destroy_refused(monkeypatch, capsys):
+    """#39: --label with no orphan filter would kill in-use boxes -> refuse."""
     from jax_solitons.campaign.reap import main
     p = _FakeProvider([10, 11], labels={10: "farmA", 11: "farmB"})
     _patch_provider(monkeypatch, p)
-    rc = main(["--label", "farmA", "--yes"])
+    rc = main(["--label", "farmA", "--yes"])         # no --ledger/--older-than/--include
+    assert rc == 2 and p.destroyed == []             # refused, nothing destroyed
+    assert "REFUSING unfiltered --label destroy" in capsys.readouterr().out
+
+
+def test_main_label_include_in_use_destroys_that_label(monkeypatch, capsys):
+    """The explicit override destroys every box with the label (in-use included)."""
+    from jax_solitons.campaign.reap import main
+    p = _FakeProvider([10, 11], labels={10: "farmA", 11: "farmB"})
+    _patch_provider(monkeypatch, p)
+    rc = main(["--label", "farmA", "--include-in-use", "--yes"])
     assert rc == 0 and p.destroyed == [10]           # farmB (11) untouched
     out = capsys.readouterr().out
     assert "label 'farmA'" in out and "label='farmA'" in out
+
+
+def test_main_label_older_than_destroys_only_old(monkeypatch, capsys):
+    """--label + --older-than reaps only the aged (orphan-proxy) boxes -- the safe
+    unattended path, no --include-in-use needed."""
+    from jax_solitons.campaign.reap import main
+    p = _FakeProvider([10, 11], labels={10: "farmA", 11: "farmA"},
+                      ages={10: 8 * 3600, 11: 600})   # 10 is 8h old, 11 is 10min
+    _patch_provider(monkeypatch, p)
+    rc = main(["--label", "farmA", "--older-than", "6h", "--yes"])
+    assert rc == 0 and p.destroyed == [10]           # young in-use box (11) spared
+    assert "older-than 6h" in capsys.readouterr().out
 
 
 def test_main_label_dry_run_lists_only(monkeypatch, capsys):
@@ -214,7 +285,7 @@ def test_main_empty_label_is_a_real_scope_not_all_account(monkeypatch, capsys):
     from jax_solitons.campaign.reap import main
     p = _FakeProvider([10, 11], labels={10: "", 11: "farmB"})
     _patch_provider(monkeypatch, p)
-    rc = main(["--label", "", "--yes"])
+    rc = main(["--label", "", "--include-in-use", "--yes"])
     assert rc == 0 and p.destroyed == [10]           # only the empty-labeled one
     out = capsys.readouterr().out
     assert "label ''" in out and "ALL live instances" not in out

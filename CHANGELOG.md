@@ -7,6 +7,16 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Changed
+- **`reap --label` is no longer an unattended footgun** (#39) — a label alone
+  can't tell an orphan from an in-use box, so `--label X --yes` would destroy an
+  *active* same-label campaign's boxes mid-run. It now **refuses** an unfiltered
+  `--label` destroy unless paired with an orphan filter — `--ledger` (leaks only)
+  or the new **`--older-than <dur>`** (`6h`/`30m`/`2d`; age is a decent orphan
+  proxy since farms are short-lived) — or the explicit `--include-in-use`
+  override (mirroring how `--all` gates the all-account destroy). `reap()` gains
+  an `older_than=` filter; an instance of unknown age is never age-reaped.
+
 ## [0.0.4] - 2026-06-16
 
 ### Added
