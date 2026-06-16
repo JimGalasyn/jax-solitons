@@ -5,7 +5,9 @@ import json
 class _Inst:
     def __init__(self, id, status="running", dph=0.1, label=None):
         self.id = id; self.status = status; self.dph = dph
-        self.raw = {"label": label} if label else {}    # Vast stores the label here
+        # `is not None` so an explicit empty label is preserved (mirrors the real
+        # provider record), not dropped like a falsy value.
+        self.raw = {"label": label} if label is not None else {}
 
 
 class _FakeProvider:
@@ -194,7 +196,7 @@ def test_main_label_scope_destroys_only_that_label(monkeypatch, capsys):
     rc = main(["--label", "farmA", "--yes"])
     assert rc == 0 and p.destroyed == [10]           # farmB (11) untouched
     out = capsys.readouterr().out
-    assert "label 'farmA'" in out and "label=farmA" in out
+    assert "label 'farmA'" in out and "label='farmA'" in out
 
 
 def test_main_label_dry_run_lists_only(monkeypatch, capsys):
@@ -204,6 +206,18 @@ def test_main_label_dry_run_lists_only(monkeypatch, capsys):
     rc = main(["--label", "farmA"])                  # no --yes
     assert rc == 0 and p.destroyed == []
     assert "DRY RUN" in capsys.readouterr().out
+
+
+def test_main_empty_label_is_a_real_scope_not_all_account(monkeypatch, capsys):
+    """`--label ''` must be honored as a scope (empty-labeled instances only) and
+    displayed as such -- never silently reported/treated as the all-account nuke."""
+    from jax_solitons.campaign.reap import main
+    p = _FakeProvider([10, 11], labels={10: "", 11: "farmB"})
+    _patch_provider(monkeypatch, p)
+    rc = main(["--label", "", "--yes"])
+    assert rc == 0 and p.destroyed == [10]           # only the empty-labeled one
+    out = capsys.readouterr().out
+    assert "label ''" in out and "ALL live instances" not in out
 
 
 def test_main_unscoped_destroy_refused(monkeypatch, capsys):

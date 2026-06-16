@@ -177,15 +177,19 @@ def main(argv=None) -> int:
     provider = VastProvider()
 
     live = provider.list_instances()                # fetch ONCE, reuse below
+    # `is not None` (not truthiness) so the displayed scope matches the actual
+    # filtering: an explicit empty `--label ''` / `--ledger ''` IS a scope (the
+    # safety gate + reap() treat it as one), so it must not print as all-account.
     scope = " & ".join(
-        ([f"ledger {args.ledger}"] if args.ledger else [])
-        + ([f"label {args.label!r}"] if args.label else [])) or "ALL live instances"
+        ([f"ledger {args.ledger!r}"] if args.ledger is not None else [])
+        + ([f"label {args.label!r}"] if args.label is not None else [])
+    ) or "ALL live instances"
     print(f"reap scope: {scope}")
     if not live:
         print("no live instances -- nothing to reap."); return 0
     for i in live:
         lbl = _label_of(i)
-        tag = f"  label={lbl}" if lbl else ""
+        tag = f"  label={lbl!r}" if lbl is not None else ""   # show even an empty label
         print(f"  instance {i.id}  status={i.status}  ${float(i.dph or 0):.4f}/hr{tag}")
 
     # safety gate: an unscoped (all-account) destroy must be explicit. A --label
