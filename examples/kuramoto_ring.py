@@ -40,7 +40,6 @@ import dataclasses
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from jax_solitons.grid import BoxGrid
 from jax_solitons.model import Model
@@ -63,8 +62,13 @@ class KuramotoCoupling:
 
 
 def _wrap(d):
-    """Map a phase difference into (-pi, pi]."""
-    return d - 2.0 * jnp.pi * jnp.round(d / (2.0 * jnp.pi))
+    """Principal value of a phase difference, via the complex phase (`jnp.angle`,
+    the repo's convention for angles). A difference of EXACTLY +-pi is a genuine
+    measure-zero ambiguity -- the two representations are the same point on the
+    circle and the winding number is undefined there -- so neither this nor a
+    round(d/2pi) wrap can pin the sign at the boundary; it never arises for the
+    |q| < N/2 twists here (neighbour differences 2*pi*q/N stay strictly < pi)."""
+    return jnp.angle(jnp.exp(1j * d))
 
 
 def winding_number(theta, grid: BoxGrid):
