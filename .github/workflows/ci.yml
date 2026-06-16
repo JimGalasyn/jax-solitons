@@ -7,7 +7,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Self-hosted runner on technozoic_00 (ssdnodes). The 'nwt' label pins it to
+    # our box specifically. Fork-PR code is gated: Settings -> Actions requires
+    # approval for ALL outside collaborators before any workflow runs.
+    runs-on: [self-hosted, nwt]
     strategy:
       matrix:
         python-version: ["3.10", "3.12"]
