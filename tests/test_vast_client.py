@@ -257,6 +257,36 @@ def test_req_retries_transient_dns_then_succeeds(monkeypatch, no_sleep):
     assert no_sleep[1] > no_sleep[0]                 # exponential
 
 
+def test_rent_terminal_auth_error_propagates_as_vasterror(mk, monkeypatch):
+    """A 401/403 from create is a terminal config error (bad key) -- it must
+    surface, not be disguised as an offer race that burns the whole pool."""
+    from jax_solitons.campaign.vast import RentUnavailable  # noqa: F401
+    c = mk(FakeVast())
+    err = VastError("PUT /asks -> HTTP 403: forbidden"); err.code = 403
+
+    def boom(*a, **k):
+        raise err
+    monkeypatch.setattr(c, "create", boom)
+    with pytest.raises(VastError):
+        with c.rent(OFFER, LAUNCH, timeout_s=5):
+            pass
+
+
+def test_rent_offer_race_becomes_rentunavailable(mk, monkeypatch):
+    """A non-auth create failure (e.g. 404 ask-gone) created no instance -> a
+    recoverable RentUnavailable the executor fails over on."""
+    from jax_solitons.campaign.vast import RentUnavailable
+    c = mk(FakeVast())
+    err = VastError("PUT /asks -> HTTP 404: no_such_ask"); err.code = 404
+
+    def boom(*a, **k):
+        raise err
+    monkeypatch.setattr(c, "create", boom)
+    with pytest.raises(RentUnavailable):
+        with c.rent(OFFER, LAUNCH, timeout_s=5):
+            pass
+
+
 def test_req_terminal_dns_is_not_retried(monkeypatch, no_sleep):
     """A name that genuinely doesn't resolve (EAI_NONAME) must fail immediately --
     retrying it just burns backoff and hides a misconfiguration."""

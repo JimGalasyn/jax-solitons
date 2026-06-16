@@ -263,13 +263,16 @@ class FleetExecutor:
                         cmd = f"cd {shlex.quote(self.remote_work_dir)} && {leg.command}"
                         rc, out = _ssh(self.key_path, host.ssh_host, host.ssh_port,
                                        cmd, timeout=self.run_timeout)
+                        # host.id is the rented INSTANCE id (not offer.id), so a
+                        # result correlates to the provider's live-instance list,
+                        # `_track`, and `dead_reason`.
                         if rc != 0:
-                            return LegResult(leg.label, "RUN_FAIL", offer.id,
+                            return LegResult(leg.label, "RUN_FAIL", host.id,
                                              f"rc={rc}: {out[-240:]}")
                         self._fetch(host, leg)
                         done = self._complete(leg) or not leg.marker()
                         return LegResult(leg.label, "OK" if done else "NO_RESULT",
-                                         offer.id)
+                                         host.id)
                     finally:
                         self._untrack(host.id)
             except (HostProbeFailed, TimeoutError, RentUnavailable) as e:
@@ -277,6 +280,8 @@ class FleetExecutor:
                           f"{type(e).__name__} -> failing over")
                 continue                                  # bad host / race -> next
             except Exception as e:                        # noqa: BLE001
+                # No host handle here (rent may have failed before yielding), so
+                # the offer id is the best correlation we have for a terminal error.
                 msg = str(e)
                 status = "LEAK" if "LEAK" in msg.upper() else "ERROR"
                 return LegResult(leg.label, status, offer.id,
@@ -298,15 +303,19 @@ class FleetExecutor:
         destroy = getattr(self.provider, "destroy", None)
         if destroy is None:
             return
+        # RentedHost.id is a provider-opaque string in the Provider contract, so
+        # pass it through as-is (no int cast) and keep the manual-cleanup hint
+        # provider-agnostic -- this backstop must not assume a Vast id or CLI.
+        name = getattr(self.provider, "name", "provider")
         with self._live_lock:
             ids = list(self._live)
         for iid in ids:
             try:
-                destroy(int(iid))
+                destroy(iid)
                 self._log(f"  signal teardown: destroyed {iid}")
             except Exception as e:                        # noqa: BLE001
-                self._log(f"  signal teardown: FAILED to destroy {iid}: {e} "
-                          f"-- run `vastai destroy instance {iid}`")
+                self._log(f"  signal teardown: FAILED to destroy {iid} ({e}) "
+                          f"-- destroy instance {iid} manually via the {name} provider")
 
     # -- the run -------------------------------------------------------------
     def run(self, legs: Iterable[FleetLeg]) -> list[LegResult]:

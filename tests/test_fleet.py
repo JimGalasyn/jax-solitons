@@ -117,6 +117,16 @@ def _exec(prov, tmp_path, **kw):
                          log=lambda *_a: None, **kw)
 
 
+def test_legresult_host_id_is_instance_not_offer(patched, tmp_path):
+    """host_id correlates to the rented INSTANCE (host.id), not the offer id, so
+    a result can be matched against the provider's live-instance list."""
+    patched(ready=True)
+    prov = FakeProvider([_offer("offer-a")])
+    [r] = _exec(prov, tmp_path).run([_leg("L1")])
+    assert r.status == "OK"
+    assert r.host_id == "1000" and r.host_id != "offer-a"   # instance id, not offer
+
+
 def test_happy_path_runs_all_legs_and_tears_down(patched, tmp_path):
     patched(ready=True)
     prov = FakeProvider([_offer("a"), _offer("b")])

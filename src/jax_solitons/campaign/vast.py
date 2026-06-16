@@ -60,7 +60,13 @@ _BAD_HOST_SIGNS = (
 
 
 class VastError(RuntimeError):
-    """A Vast API call failed (status quoted, key never echoed)."""
+    """A Vast API call failed (status quoted, key never echoed).
+
+    `code` carries the HTTP status when the failure was an HTTP error (None for a
+    transport/DNS failure), so a caller can distinguish a terminal auth/config
+    error (401/403) from a recoverable one without parsing the message."""
+
+    code: int | None = None
 
 
 # -- transient-fault retry (issue #23) ---------------------------------------
@@ -151,8 +157,10 @@ def _req(method: str, url: str, key: str, payload=None, timeout: float = 30,
         except urllib.error.HTTPError as e:
             if not (_transient(e, idempotent=idempotent) and attempt < tries - 1):
                 detail = e.read()[:200].decode(errors="replace")
+                err = VastError(f"{method} {endpoint} -> HTTP {e.code}: {detail}")
+                err.code = e.code                # let callers classify (auth vs race)
                 e.close()
-                raise VastError(f"{method} {endpoint} -> HTTP {e.code}: {detail}")
+                raise err
             e.close()                           # retrying: release the response fd
         except (urllib.error.URLError, socket.timeout, TimeoutError,
                 ConnectionError) as e:
@@ -394,6 +402,13 @@ class VastProvider:
                                        onstart_cmd=launch.onstart,
                                        disk=launch.disk_gb, label=launch.label)
         except VastError as e:
+            # An auth/permission failure (401/403) is a TERMINAL config error -- a
+            # bad API key would otherwise be disguised as an offer race and burn
+            # the whole pool into a misleading NO_OFFERS. Surface those; only an
+            # ambiguous/availability failure (404 ask-gone, 5xx-after-retry,
+            # transport) -- which created no instance -- becomes a failover signal.
+            if e.code in (401, 403):
+                raise
             raise RentUnavailable(f"could not rent offer {offer.id}: {e}") from e
         self._log("rented", provider=self.name, offer_id=offer.id,
                   instance_id=instance_id, gpu=offer.gpu_name, dph=offer.dph,

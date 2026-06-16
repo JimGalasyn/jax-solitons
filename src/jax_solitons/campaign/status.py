@@ -16,11 +16,22 @@ hosts + cumulative spend -- that outlives any one driver process.
 from __future__ import annotations
 
 import argparse
+from typing import Protocol, runtime_checkable
 
 from jax_solitons.campaign.vast import VastLedger, VastProvider
 
 
-def fleet_status(provider: VastProvider | None = None,
+@runtime_checkable
+class InstanceLister(Protocol):
+    """Any provider that can enumerate its live instances (cost-safety). The base
+    `Provider` contract is just offers + rent; this is the optional extra
+    `fleet_status` needs, so the annotation isn't pinned to `VastProvider` -- a
+    `FakeProvider` or any other adapter exposing `list_instances` is accepted."""
+
+    def list_instances(self) -> list: ...
+
+
+def fleet_status(provider: InstanceLister | None = None,
                  ledger: VastLedger | None = None) -> dict:
     """Snapshot: instances live RIGHT NOW (cost-safety) + cumulative ledger
     spend/outcomes. Either source is optional -- pass a ledger for an after-the-
