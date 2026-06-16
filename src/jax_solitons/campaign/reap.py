@@ -115,20 +115,26 @@ def _instance_age_s(inst, *, now: float | None = None) -> float | None:
         ts = float(val)                                  # epoch seconds
     except (TypeError, ValueError):
         try:
-            ts = datetime.datetime.fromisoformat(
-                str(val).replace("Z", "+00:00")).timestamp()
+            dt = datetime.datetime.fromisoformat(str(val).replace("Z", "+00:00"))
         except ValueError:
             return None
+        if dt.tzinfo is None:                            # naive -> assume UTC, so
+            dt = dt.replace(tzinfo=datetime.timezone.utc)  # age is machine-stable
+        ts = dt.timestamp()
     return max(0.0, now - ts)
 
 
 def _parse_duration(s: str) -> float:
     """Parse a duration like '90s' / '30m' / '6h' / '2d' (or a bare number =
-    seconds) to seconds. Raises ValueError on a malformed value."""
+    seconds) to a POSITIVE number of seconds. Raises ValueError on a malformed or
+    non-positive value: a zero/negative age filter would keep every instance
+    (age >= 0 always holds) AND still count as an 'orphan filter' that satisfies
+    the --label gate -- reintroducing the in-use footgun this exists to prevent."""
     s = s.strip().lower()
-    if s and s[-1] in _DUR_UNITS:
-        return float(s[:-1]) * _DUR_UNITS[s[-1]]
-    return float(s)
+    secs = float(s[:-1]) * _DUR_UNITS[s[-1]] if s and s[-1] in _DUR_UNITS else float(s)
+    if not secs > 0:                                     # rejects 0, negative, NaN
+        raise ValueError(f"duration must be positive, got {s!r}")
+    return secs
 
 
 def _classify(exc: Exception) -> str:
@@ -231,7 +237,11 @@ def main(argv=None) -> int:
                     help="actually destroy (default is a dry-run listing)")
     ap.add_argument("--retries", type=int, default=4)
     args = ap.parse_args(argv)
-    older_than = _parse_duration(args.older_than) if args.older_than else None
+    try:
+        older_than = _parse_duration(args.older_than) if args.older_than else None
+    except ValueError as e:
+        print(f"invalid --older-than {args.older_than!r}: {e}")
+        return 2
 
     from jax_solitons.campaign.vast import VastProvider
     provider = VastProvider()

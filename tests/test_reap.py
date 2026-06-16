@@ -176,11 +176,40 @@ def test_parse_duration_units():
     assert _parse_duration("45") == 45             # bare number = seconds
 
 
+def test_parse_duration_rejects_nonpositive():
+    """A zero/negative duration would be a no-op age filter that still satisfies
+    the --label gate -> the in-use footgun. Reject it (#39 review)."""
+    import pytest
+    from jax_solitons.campaign.reap import _parse_duration
+    for bad in ("0", "-1h", "-30m", "0s"):
+        with pytest.raises(ValueError):
+            _parse_duration(bad)
+
+
+def test_main_invalid_older_than_exits_clean(monkeypatch, capsys):
+    from jax_solitons.campaign.reap import main
+    _patch_provider(monkeypatch, _FakeProvider([10], labels={10: "f"}))
+    # "0" is non-positive -> rejected (the `-1h` form argparse blocks even earlier
+    # as a stray option, an extra safety layer); either way no destroy happens.
+    rc = main(["--label", "f", "--older-than", "0", "--yes"])
+    assert rc == 2 and "invalid --older-than" in capsys.readouterr().out
+
+
 def test_instance_age_reads_start_or_none():
     from jax_solitons.campaign.reap import _instance_age_s
     assert _instance_age_s(_Inst(1, age_s=7200)) >= 7199        # ~2h
     assert _instance_age_s(_Inst(1)) is None                    # no start field
     assert _instance_age_s(object()) is None                    # no raw attr
+
+
+def test_instance_age_naive_iso_is_utc():
+    """A tz-naive ISO start time is read as UTC (machine-timezone stable)."""
+    from jax_solitons.campaign.reap import _instance_age_s
+
+    class I:
+        raw = {"created_at": "2020-01-01T00:00:00"}              # naive -> UTC
+    # one hour after that instant, age should be ~3600 regardless of $TZ
+    assert abs(_instance_age_s(I(), now=1577836800 + 3600) - 3600) < 1
 
 
 def test_reap_reuses_prefetched_live_no_extra_list_call():
