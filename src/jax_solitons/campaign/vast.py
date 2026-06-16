@@ -73,24 +73,33 @@ _RETRY_HTTP = frozenset({408, 425, 429, 500, 502, 503, 504})
 _MAX_TRIES = 5
 _BACKOFF_BASE = 0.5              # 0.5, 1, 2, 4 s ... (capped)
 _BACKOFF_CAP = 8.0
+# Only a TEMPORARY resolver failure (EAI_AGAIN -- the "temporary failure in name
+# resolution" a saturated resolver throws) is worth retrying. A name that
+# genuinely doesn't resolve (EAI_NONAME / EAI_FAIL) is terminal: retrying it just
+# burns backoff and hides a misconfiguration. (EAI_AGAIN is POSIX-standard; the
+# getattr keeps this importable on a platform that somehow lacks it.)
+_TRANSIENT_GAIERROR = frozenset(
+    getattr(socket, n) for n in ("EAI_AGAIN",) if hasattr(socket, n))
 
 
 def _transient(exc: BaseException, *, idempotent: bool) -> bool:
     """True if `exc` is a transient transport fault worth retrying.
 
-    The `idempotent` distinction is a cost-safety invariant, not a nicety: a DNS
-    resolution failure (`socket.gaierror`, the EAI_AGAIN a saturated resolver
-    throws) happens BEFORE the request reaches Vast, so the server never acted on
-    it and retrying is always safe -- even a non-idempotent `create`. A
-    post-connection fault (reset, read timeout, 5xx) might mean the request WAS
-    received and acted on, so it is retried only for idempotent calls; retrying a
-    `create` that actually succeeded would rent a second GPU that bills by the
-    second (the very leak the Provider contract exists to prevent)."""
+    The `idempotent` distinction is a cost-safety invariant, not a nicety: a
+    TEMPORARY DNS failure (`socket.gaierror` with EAI_AGAIN, the "temporary
+    failure in name resolution" a saturated resolver throws) happens BEFORE the
+    request reaches Vast, so the server never acted on it and retrying is always
+    safe -- even a non-idempotent `create`. Only EAI_AGAIN qualifies; a name that
+    genuinely doesn't resolve (EAI_NONAME/EAI_FAIL) is terminal. A post-connection
+    fault (reset, read timeout, 5xx) might mean the request WAS received and acted
+    on, so it is retried only for idempotent calls; retrying a `create` that
+    actually succeeded would rent a second GPU that bills by the second (the very
+    leak the Provider contract exists to prevent)."""
     if isinstance(exc, urllib.error.HTTPError):
         return idempotent and exc.code in _RETRY_HTTP
     if isinstance(exc, urllib.error.URLError):
         if isinstance(exc.reason, socket.gaierror):
-            return True                      # DNS: pre-send, always safe
+            return exc.reason.errno in _TRANSIENT_GAIERROR   # EAI_AGAIN: pre-send
         return idempotent                    # connect/read transport fault
     if isinstance(exc, (socket.timeout, TimeoutError, ConnectionError)):
         return idempotent

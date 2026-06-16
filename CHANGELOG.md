@@ -15,9 +15,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   Retry is idempotent-aware: `create` retries only pre-send DNS failures so a
   half-completed rent can never double-rent a GPU. A raw `URLError` no longer
   escapes — every network failure surfaces as `VastError`.
-- **`LaunchSpec.label`** (#24) — stamps every rented instance with a
-  campaign/run id so live instances are attributable and `reap` can scope cleanup
-  by label (the proactive half of orphan prevention).
+- **`LaunchSpec.label`** (#24) — stamps every rented instance with a campaign/run
+  id so a live instance is attributable to its run (identifiable in `vastai` / the
+  API), the proactive half of orphan prevention and the hook for a future
+  label-scoped `reap`. (`reap` today still scopes by ledger ids or `--all`.)
 - **`make_verlet_step` is now exported** from `jax_solitons.steppers` (#29) — the
   factory was previously reachable only via the `.verlet` submodule.
 

@@ -230,8 +230,15 @@ def _seq_urlopen(behaviors):
 
 
 def _dns_error():
-    """The EAI_AGAIN a saturated resolver throws -- a pre-send DNS failure."""
-    return _ue.URLError(vast.socket.gaierror(-3, "Temporary failure in name resolution"))
+    """The EAI_AGAIN a saturated resolver throws -- a TRANSIENT pre-send failure."""
+    return _ue.URLError(vast.socket.gaierror(
+        vast.socket.EAI_AGAIN, "Temporary failure in name resolution"))
+
+
+def _dns_terminal():
+    """EAI_NONAME -- the name genuinely doesn't resolve (terminal, not retried)."""
+    return _ue.URLError(vast.socket.gaierror(
+        vast.socket.EAI_NONAME, "Name or service not known"))
 
 
 @pytest.fixture
@@ -248,6 +255,16 @@ def test_req_retries_transient_dns_then_succeeds(monkeypatch, no_sleep):
     assert vast._req("GET", "https://x/api/v1/instances/", "k") == {"ok": 1}
     assert len(no_sleep) == 2                        # backed off before each retry
     assert no_sleep[1] > no_sleep[0]                 # exponential
+
+
+def test_req_terminal_dns_is_not_retried(monkeypatch, no_sleep):
+    """A name that genuinely doesn't resolve (EAI_NONAME) must fail immediately --
+    retrying it just burns backoff and hides a misconfiguration."""
+    monkeypatch.setattr(vast.urllib.request, "urlopen",
+                        _seq_urlopen([_dns_terminal()]))
+    with pytest.raises(VastError):
+        vast._req("GET", "https://x/api/v1/instances/", "k")
+    assert no_sleep == []                              # no retry, no backoff
 
 
 def test_req_exhausts_retries_then_raises_vasterror(monkeypatch, no_sleep):
