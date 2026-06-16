@@ -364,8 +364,8 @@ class _SignalGuard:
         self._prev: dict[int, object] = {}
 
     def __enter__(self):
-        if threading.current_thread() is not threading.main_thread():
-            return self                                   # can't set handlers here
+        if threading.current_thread() is not threading.main_thread():  # pragma: no cover
+            return self                                   # can't set handlers off-main
         for sig in self._SIGNALS:
             try:
                 self._prev[sig] = signal.getsignal(sig)
