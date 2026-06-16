@@ -7,6 +7,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-06-16
+
 ### Added
 - **`reap --label NAME`** (#24) — a third reap scope: destroy only instances
   stamped with that `LaunchSpec.label`. Safe under concurrent farming like
