@@ -8,6 +8,32 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ## [Unreleased]
 
 ### Added
+- **`FleetExecutor`** (`campaign.fleet`, #25) — a parallel, one-rented-host-per-leg
+  *script* fleet over any `Provider`. A fleet run is now data — a list of
+  `FleetLeg(label, command, ship, fetch)` — instead of a forked driver, so the
+  three hand-rolled private drivers (`run_eps_fleet` / `run_stability_fleet` /
+  `run_eps_kick_fleet`) collapse to thin callers. Robustness from the 2026-06-15
+  farming session is built in: per-leg failover on a bad host (`HostProbeFailed`)
+  or offer race (`RentUnavailable`); **fast-fail a corpse** via the provider's API
+  status instead of ssh-polling for the full deadline (#27); **offer-pool refresh**
+  when it drains under failover (#28); **resume/skip** legs whose output already
+  exists (#26); **launch jitter** against the thundering-herd (#29); and a
+  **signal-safe teardown** backstop that destroys in-flight rentals on
+  SIGTERM/SIGINT (#24). Ships `FleetLeg`, `LegResult`, and the `ImportReady` /
+  `SentinelReady` readiness probes.
+- **`RentUnavailable`** — a `Provider` failover signal distinct from
+  `HostProbeFailed`: the offer was taken before an instance was created, so there
+  is nothing to tear down and the executor just tries the next offer.
+  `VastProvider.rent` raises it on a create-time race; `ProviderExecutor` and
+  `FleetExecutor` both fail over on it.
+- **`VastProvider.dead_reason`** — reports a visibly-failed instance
+  (error/exited or a bad-host `status_msg`) so a readiness loop can fast-fail it
+  (#27); keeps the bad-host string matching in the adapter so executors stay
+  provider-agnostic.
+- **`campaign status`** (`campaign.status`, #29) — `python -m
+  jax_solitons.campaign.status --ledger <path>` prints live instances (what is
+  billing now) + cumulative spend/outcomes from the ledger, replacing
+  log-grepping and shelling `vastai`.
 - **Self-healing Vast REST calls** (`campaign.vast._req`, #23) — every Vast API
   call now retries transient transport faults (DNS `EAI_AGAIN`, connection reset,
   read timeout, 5xx) with exponential backoff before failing, so a saturated
