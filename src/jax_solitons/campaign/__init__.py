@@ -26,6 +26,7 @@ from jax_solitons.campaign.protocols import (
     Offer,
     Provider,
     RentedHost,
+    RentUnavailable,
     RunContext,
     RunFn,
     RunHandle,
@@ -47,6 +48,14 @@ from jax_solitons.campaign.multi import (
 )
 from jax_solitons.campaign.local_exec import InProcessExecutor
 from jax_solitons.campaign.provider_exec import ProviderExecutor
+from jax_solitons.campaign.fleet import (
+    FleetExecutor,
+    FleetLeg,
+    ImportReady,
+    LegResult,
+    SentinelReady,
+)
+from jax_solitons.campaign.status import fleet_status
 from jax_solitons.campaign.remote import load_run_fn, run_one
 from jax_solitons.campaign.store import (
     BlobStore,
@@ -69,10 +78,14 @@ __all__ = [
     "RunContext", "RunFn", "RunHandle", "HostReport", "State", "AdmissionError",
     # F (cloud broker) contract types
     "HostSpec", "LaunchSpec", "Offer", "RentedHost", "HostProbeFailed",
+    "RentUnavailable",
     # reference implementations
     "FileRunRegistry", "JsonlEventSink", "ProbeAdmission",
     "LocalExecutor", "SkyPilotExecutor", "ProviderExecutor", "InProcessExecutor",
     "VastProvider", "VastLedger", "RunPodProvider",
+    # parallel script-fleet executor (#25) + live status
+    "FleetExecutor", "FleetLeg", "LegResult", "ImportReady", "SentinelReady",
+    "fleet_status",
     # shared object-store backend (A/B/C over a BlobStore)
     "BlobStore", "MemoryBlobStore", "S3BlobStore",
     "ObjectStoreRunRegistry", "ObjectStoreEventSink",

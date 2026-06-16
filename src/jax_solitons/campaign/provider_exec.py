@@ -30,6 +30,7 @@ from jax_solitons.campaign.protocols import (
     LaunchSpec,
     Provider,
     RentedHost,
+    RentUnavailable,
 )
 from jax_solitons.campaign.remote import RunFnRef
 from jax_solitons.campaign.worker import RESULT_PREFIX
@@ -67,6 +68,19 @@ def _scp_down(key: str, host: str, port: int, remote: str, local: str,
         return r.returncode, r.stdout + r.stderr
     except subprocess.TimeoutExpired as e:
         return 124, f"scp timeout after {timeout}s: {e}"  # best-effort sync; don't abort
+
+
+def _scp_up(key: str, host: str, port: int, local: str, remote: str,
+            timeout: float = 600):  # pragma: no cover  (live subprocess)
+    """Ship one local path up to the box (the FleetExecutor driver-script step)."""
+    try:
+        r = subprocess.run(
+            ["scp", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
+             "-P", str(port), "-r", local, f"root@{host}:{remote}"],
+            capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout + r.stderr
+    except subprocess.TimeoutExpired as e:
+        return 124, f"scp-up timeout after {timeout}s: {e}"
 
 
 class ProviderExecutor:
@@ -179,8 +193,8 @@ class ProviderExecutor:
                     results = [self._run_config(host, c) for c in configs]
                     self._sync_back(host)
                     return results
-            except (HostProbeFailed, TimeoutError) as e:
-                last_err = e                              # bad host -> next offer
+            except (HostProbeFailed, TimeoutError, RentUnavailable) as e:
+                last_err = e                              # bad host/race -> next offer
                 continue
         raise RuntimeError(
             f"{self.provider.name}: all {len(offers)} offers failed to run; "

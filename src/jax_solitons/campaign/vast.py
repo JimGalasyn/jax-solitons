@@ -41,6 +41,7 @@ from jax_solitons.campaign.protocols import (
     LaunchSpec,
     Offer,
     RentedHost,
+    RentUnavailable,
 )
 
 V0 = "https://console.vast.ai/api/v0"
@@ -59,7 +60,13 @@ _BAD_HOST_SIGNS = (
 
 
 class VastError(RuntimeError):
-    """A Vast API call failed (status quoted, key never echoed)."""
+    """A Vast API call failed (status quoted, key never echoed).
+
+    `code` carries the HTTP status when the failure was an HTTP error (None for a
+    transport/DNS failure), so a caller can distinguish a terminal auth/config
+    error (401/403) from a recoverable one without parsing the message."""
+
+    code: int | None = None
 
 
 # -- transient-fault retry (issue #23) ---------------------------------------
@@ -150,8 +157,10 @@ def _req(method: str, url: str, key: str, payload=None, timeout: float = 30,
         except urllib.error.HTTPError as e:
             if not (_transient(e, idempotent=idempotent) and attempt < tries - 1):
                 detail = e.read()[:200].decode(errors="replace")
+                err = VastError(f"{method} {endpoint} -> HTTP {e.code}: {detail}")
+                err.code = e.code                # let callers classify (auth vs race)
                 e.close()
-                raise VastError(f"{method} {endpoint} -> HTTP {e.code}: {detail}")
+                raise err
             e.close()                           # retrying: release the response fd
         except (urllib.error.URLError, socket.timeout, TimeoutError,
                 ConnectionError) as e:
@@ -348,6 +357,25 @@ class VastProvider:
     def destroy(self, instance_id: int) -> None:
         _req("DELETE", f"{V0}/instances/{instance_id}/", self.key, {})
 
+    def dead_reason(self, instance_id: int | str) -> str | None:
+        """A non-None reason if this instance has VISIBLY failed -- it flipped to
+        error/exited, or its status_msg matches a known bad-host signature -- else
+        None (still coming up, or a transient status hiccup we shouldn't fail
+        over on). Lets a readiness loop fast-fail a corpse (a container that never
+        came up) in seconds instead of ssh-polling it for the full deadline (#27).
+        Keeps the bad-host string matching here in the adapter so an executor's
+        fast-fail stays provider-agnostic (it just asks `dead_reason`)."""
+        try:
+            inst = self.status(int(instance_id))
+        except Exception:
+            return None                       # transient status read: don't fail over
+        if inst.status in ("error", "exited"):
+            return f"instance {instance_id} -> {inst.status}"
+        msg = str(inst.raw.get("status_msg") or "")
+        if any(s in msg.lower() for s in _BAD_HOST_SIGNS):
+            return f"bad host (instance {instance_id}): {msg[:160]}"
+        return None
+
     # -- the safety primitive (the Provider F invariant) ---------------------
     @contextlib.contextmanager
     def rent(self, offer: Offer, launch: LaunchSpec, *, timeout_s: float = 600):
@@ -364,9 +392,24 @@ class VastProvider:
         usable, so the executor can fail over to the next offer.
         """
         t0 = time.monotonic()
-        instance_id = self.create(offer.id, image=launch.image,
-                                   onstart_cmd=launch.onstart, disk=launch.disk_gb,
-                                   label=launch.label)
+        # create runs BEFORE the try/finally: if it fails no instance exists, so
+        # there is nothing to tear down. A create failure is an offer race (taken
+        # between offers() and rent()) or a transient that outlived _req's retry;
+        # surface it as RentUnavailable so the executor fails over provider-
+        # agnostically, never as a leak.
+        try:
+            instance_id = self.create(offer.id, image=launch.image,
+                                       onstart_cmd=launch.onstart,
+                                       disk=launch.disk_gb, label=launch.label)
+        except VastError as e:
+            # An auth/permission failure (401/403) is a TERMINAL config error -- a
+            # bad API key would otherwise be disguised as an offer race and burn
+            # the whole pool into a misleading NO_OFFERS. Surface those; only an
+            # ambiguous/availability failure (404 ask-gone, 5xx-after-retry,
+            # transport) -- which created no instance -- becomes a failover signal.
+            if e.code in (401, 403):
+                raise
+            raise RentUnavailable(f"could not rent offer {offer.id}: {e}") from e
         self._log("rented", provider=self.name, offer_id=offer.id,
                   instance_id=instance_id, gpu=offer.gpu_name, dph=offer.dph,
                   reliability=offer.reliability,
