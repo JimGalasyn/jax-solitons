@@ -43,7 +43,7 @@ def test_leaked_ids_diffs_rented_minus_destroyed(tmp_path):
         {"event": "rented", "instance_id": 1},
         {"event": "running", "instance_id": 1},
         {"event": "rented", "instance_id": 2},
-        {"event": "destroyed", "instance_id": 2},
+        {"event": "destroyed", "instance_id": 2, "verify": "gone"},
         {"event": "rented", "instance_id": 3},
     ])
     assert leaked_ids(led) == {1, 3}
@@ -52,6 +52,28 @@ def test_leaked_ids_diffs_rented_minus_destroyed(tmp_path):
 def test_leaked_ids_missing_file_is_empty(tmp_path):
     from jax_solitons.campaign.reap import leaked_ids
     assert leaked_ids(tmp_path / "nope.jsonl") == set()
+
+
+def test_leaked_ids_failed_teardown_stays_leaked(tmp_path):
+    # a `destroyed` event clears a leak ONLY when verify=="gone" (issue #30/PR#22
+    # review): a failed/unverified teardown must remain a suspect.
+    from jax_solitons.campaign.reap import leaked_ids
+    led = _ledger(tmp_path, [
+        {"event": "rented", "instance_id": 5},
+        {"event": "destroyed", "instance_id": 5, "destroyed": False, "verify": "present"},
+        {"event": "rented", "instance_id": 6},
+        {"event": "destroyed", "instance_id": 6, "verify": "gone"},
+    ])
+    assert leaked_ids(led) == {5}                    # 5 failed teardown; 6 confirmed gone
+
+
+def test_leaked_ids_skips_nonnumeric_ids(tmp_path):
+    from jax_solitons.campaign.reap import leaked_ids
+    led = _ledger(tmp_path, [
+        {"event": "rented", "instance_id": "i-abc"},  # string id (other provider)
+        {"event": "rented", "instance_id": 7},
+    ])
+    assert leaked_ids(led) == {7}                    # didn't crash; skipped the string id
 
 
 # -- targeting / scope --------------------------------------------------------
@@ -74,7 +96,7 @@ def test_reap_ledger_scope_only_leaked_and_live(tmp_path):
     led = _ledger(tmp_path, [
         {"event": "rented", "instance_id": 1},
         {"event": "rented", "instance_id": 3},
-        {"event": "destroyed", "instance_id": 3},
+        {"event": "destroyed", "instance_id": 3, "verify": "gone"},
     ])
     p = _FakeProvider([1, 99])                       # leaked={1,3}, live={1,99}
     rep = reap(p, ledger=led, dry_run=False)
@@ -91,8 +113,10 @@ def test_reap_reuses_prefetched_live_no_extra_list_call():
 
 
 # -- classified / idempotent destroy (issue #30.1) ----------------------------
-def test_reap_retries_transient_then_succeeds():
+def test_reap_retries_transient_then_succeeds(monkeypatch):
+    from jax_solitons.campaign import reap as reapmod
     from jax_solitons.campaign.reap import reap
+    monkeypatch.setattr(reapmod.time, "sleep", lambda *_: None)   # no real backoff
     p = _FakeProvider([10], errors={10: [OSError("Temporary failure in name resolution")] * 2})
     rep = reap(p, dry_run=False, retries=4)
     assert rep["destroyed"] == [10] and rep["failed"] == []
@@ -117,8 +141,10 @@ def test_reap_auth_error_fails_fast_no_retry():
     assert p.attempts.count(10) == 1                 # terminal -> one attempt, no backoff
 
 
-def test_reap_permanent_transient_failure_reported():
+def test_reap_permanent_transient_failure_reported(monkeypatch):
+    from jax_solitons.campaign import reap as reapmod
     from jax_solitons.campaign.reap import reap
+    monkeypatch.setattr(reapmod.time, "sleep", lambda *_: None)   # no real backoff
     p = _FakeProvider([10], errors={10: [OSError("conn reset")] * 99})
     rep = reap(p, dry_run=False, retries=3)
     assert rep["failed"] == [10] and rep["destroyed"] == [] and rep["gone"] == []
