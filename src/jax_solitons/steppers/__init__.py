@@ -6,6 +6,7 @@ from jax_solitons.steppers.splitstep import make_splitstep, splitstep_evolve
 from jax_solitons.steppers.verlet import (
     boost_velocity,
     kinetic_energy,
+    make_verlet_step,
     verlet_evolve,
     verlet_step,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "boost_velocity",
     "kinetic_energy",
     "make_splitstep",
+    "make_verlet_step",
     "splitstep_evolve",
     "verlet_evolve",
     "verlet_step",

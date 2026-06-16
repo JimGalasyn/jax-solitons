@@ -271,11 +271,18 @@ class LaunchSpec:
     `image`'s CUDA floor must be <= the chosen offer's `cuda_max` (see
     `HostSpec.min_cuda`). `onstart` is the bootstrap script the host runs on
     boot; it should signal readiness/failure so `rent` can probe-and-bail (P9).
+
+    `label` stamps every instance the provider rents under this spec (e.g. a
+    campaign/run id like ``"eps-kick-farm-2026-06-15"``) so a live instance is
+    attributable to the run that created it -- the proactive half of orphan
+    prevention: `reap` (and a human at the console) can then scope cleanup by
+    label instead of diffing the ledger (#24).
     """
 
     image: str
     onstart: str
     disk_gb: float = 40.0
+    label: str = "jax-solitons"
 
 
 @dataclasses.dataclass(frozen=True)
