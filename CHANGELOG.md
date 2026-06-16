@@ -7,6 +7,16 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+- **Multi-cloud `reap` + `RunPodProvider` reap contract** (#45) — the orphan
+  reaper is now provider-agnostic: `reap --provider {vast,runpod}` (a lazy
+  name→Provider factory) and string-normalized ids, so the `--ledger` and `--all`
+  scopes work for RunPod's non-numeric pod ids (Vast reports stay numeric).
+  `RunPodProvider` gains `list_instances()` + `destroy()` (the reap contract),
+  stamps `LaunchSpec.label` as the pod name for `--label` attribution, and adds
+  `dead_reason()` for FleetExecutor fast-fail parity. Modal is serverless (the
+  Executor seam) — nothing to reap. Towards one control plane for every backend.
+
 ### Changed
 - **`reap --label` is no longer an unattended footgun** (#39) — a label alone
   can't tell an orphan from an in-use box, so `--label X --yes` would destroy an

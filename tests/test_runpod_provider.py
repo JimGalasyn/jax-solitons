@@ -40,10 +40,11 @@ class FakeRunPod:
         self.delete_fail, self.delete_noop = delete_fail, delete_noop
         self.gql_errors = gql_errors
         self.pods: dict[str, dict] = {}    # id -> pod dict (the "live" set)
+        self.last_create = None            # the create payload (for label tests)
 
-    def _pod(self, pid):
+    def _pod(self, pid, name="jax-solitons"):
         return {"id": pid, "desiredStatus": self.status, "publicIp": self.ip,
-                "portMappings": {"22": self.port}, "costPerHr": 0.22}
+                "portMappings": {"22": self.port}, "costPerHr": 0.22, "name": name}
 
     def __call__(self, method, url, key, payload=None, timeout=30):
         if url == GQL:                                   # offers catalog
@@ -51,8 +52,9 @@ class FakeRunPod:
                 return {"errors": self.gql_errors}
             return {"data": {"gpuTypes": _CATALOG}}
         if method == "POST" and url == f"{REST}/pods":   # create
+            self.last_create = payload
             pid = "pod1"
-            self.pods[pid] = self._pod(pid)
+            self.pods[pid] = self._pod(pid, name=(payload or {}).get("name", "jax-solitons"))
             return {"id": pid}
         if method == "GET" and url == f"{REST}/pods":    # list (verify)
             return list(self.pods.values())
@@ -221,3 +223,41 @@ def test_read_key_from_file(tmp_path, monkeypatch):
     kf.write_text("rpa_filekey\n")
     monkeypatch.setattr(runpod, "_KEY_PATHS", (str(kf),))
     assert runpod._read_key() == "rpa_filekey"
+
+
+# -- the reap / control-plane contract (issue #45) ----------------------------
+def test_list_instances_returns_pods_with_normalized_label(mk):
+    f = FakeRunPod()
+    f.pods = {"podA": {"id": "podA", "desiredStatus": "RUNNING",
+                       "costPerHr": 0.22, "name": "farm-x"},
+              "podB": {"id": "podB", "desiredStatus": "EXITED", "name": "farm-y"}}
+    insts = mk(f).list_instances()
+    by = {i.id: i for i in insts}
+    assert set(by) == {"podA", "podB"}
+    assert by["podA"].dph == 0.22 and by["podA"].status == "RUNNING"
+    assert by["podA"].raw["label"] == "farm-x"          # name normalized to label
+    assert by["podB"].dph == 0.0                          # missing cost -> 0
+
+
+def test_destroy_aliases_terminate(mk):
+    f = FakeRunPod()
+    f.pods = {"podA": f._pod("podA")}
+    mk(f).destroy("podA")
+    assert "podA" not in f.pods                          # gone
+
+
+def test_dead_reason_flags_dead_status_only(mk):
+    f = FakeRunPod()
+    f.pods = {"p": f._pod("p")}                           # RUNNING
+    p = mk(f)
+    assert p.dead_reason("p") is None
+    f.pods["p"]["desiredStatus"] = "FAILED"
+    assert "FAILED" in p.dead_reason("p")
+
+
+def test_create_stamps_label_as_pod_name(mk):
+    f = FakeRunPod()
+    p = mk(f)
+    offs = p.offers(HostSpec(gpu_name="RTX_3090", max_dph=0.30, num_gpus=1))
+    p.create(offs[0], LaunchSpec(image="img", onstart="x", label="my-farm"))
+    assert f.last_create["name"] == "my-farm"            # reap --label attribution
