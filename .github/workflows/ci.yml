@@ -5,9 +5,26 @@ on:
     branches: [main]
   pull_request:
 
+# One self-hosted runner -> cancel superseded runs of the same ref so pushes
+# don't pile up ~20-min jobs behind each other.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Minimal default GITHUB_TOKEN scope: the test job only checks out + uploads
+# coverage (which uses its own CODECOV_TOKEN). Limits blast radius if a job ever
+# runs on the self-hosted runner.
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Self-hosted runner on technozoic_00 (ssdnodes, label 'nwt') for push +
+    # same-repo PRs. FORK PRs fall back to GitHub-hosted ubuntu-latest, so
+    # untrusted fork code never executes on our box -- in-code gating that does
+    # not depend on the repo "require approval for outside collaborators" UI
+    # setting (kept as defence in depth).
+    runs-on: ${{ (github.event.pull_request.head.repo.fork && fromJSON('["ubuntu-latest"]')) || fromJSON('["self-hosted", "nwt"]') }}
     strategy:
       matrix:
         python-version: ["3.10", "3.12"]
@@ -16,12 +33,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
       - name: Install (CPU jax)
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[test,oracle]"   # oracle = numpy reference for cross-engine equivalence test
       - name: Test
-        run: pytest -v --cov=jax_solitons --cov-report=xml
+        run: pytest -v -n auto --cov=jax_solitons --cov-report=xml   # -n auto: parallel across cores
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
