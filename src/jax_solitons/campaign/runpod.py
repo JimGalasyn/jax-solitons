@@ -31,6 +31,7 @@ API key: ``$RUNPOD_API_KEY``, else ``~/.runpod_api_key``.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
 import time
@@ -58,6 +59,19 @@ _CUDA_LADDER = ("11.8", "12.0", "12.1", "12.2", "12.3", "12.4", "12.5",
 
 # Pod statuses that mean "this host will never come up" -> fail over (P9).
 _DEAD_STATUSES = ("TERMINATED", "FAILED", "EXITED", "DEAD")
+
+
+@dataclasses.dataclass(frozen=True)
+class Pod:
+    """A live pod as the reaper/control-plane sees it -- the RunPod analogue of
+    `vast.Instance` (`id`/`status`/`dph`/`raw`), so `reap` is provider-agnostic.
+    `raw['label']` is normalized from the pod name (RunPod's attribution field)
+    so `reap --label` reads the same key on either cloud."""
+
+    id: str
+    status: str
+    dph: float
+    raw: dict
 
 
 class RunPodError(RuntimeError):
@@ -201,7 +215,7 @@ class RunPodProvider:
         different machine -- so retry it (unlike RunPod's per-type catalog, which
         gives the executor nothing to fail over to). Other errors propagate."""
         body = {
-            "name": "jax-solitons",
+            "name": launch.label,                        # attribution -> reap --label
             "imageName": launch.image,
             "gpuTypeIds": [offer.id],
             "gpuCount": offer.num_gpus,
@@ -241,6 +255,33 @@ class RunPodProvider:
 
     def terminate(self, pod_id: str) -> None:
         _req("DELETE", f"{REST}/pods/{pod_id}", self.key)
+
+    # -- reap / control-plane contract (provider-agnostic) -------------------
+    def destroy(self, pod_id) -> None:
+        """Alias for `terminate`, the name `reap` and the multi-cloud control
+        plane expect (matching `VastProvider.destroy`). Idempotent."""
+        self.terminate(str(pod_id))
+
+    def list_instances(self) -> list[Pod]:
+        """All of the account's pods, as `Pod`s -- the reaper's source of truth.
+        `costPerHr` field names vary; fall back to 0 (only the spend report uses
+        it). `raw['label']` is normalized from the pod name for `reap --label`."""
+        pods = _req("GET", f"{REST}/pods", self.key)
+        return [Pod(id=str(p.get("id")),
+                    status=str(p.get("desiredStatus") or "?"),
+                    dph=float(p.get("costPerHr") or p.get("adjustedCostPerHr") or 0),
+                    raw={**p, "label": p.get("name")})
+                for p in pods]
+
+    def dead_reason(self, pod_id) -> str | None:
+        """A reason if the pod has visibly failed (a `_DEAD_STATUSES` desired
+        status), else None -- the FleetExecutor fast-fail hook, at parity with
+        `VastProvider.dead_reason`."""
+        try:
+            st = str(self.status(str(pod_id)).get("desiredStatus") or "").upper()
+        except Exception:
+            return None
+        return f"pod {pod_id} -> {st}" if st in _DEAD_STATUSES else None
 
     def _present(self, pod_id: str) -> bool:
         """True if the pod still exists -- the independent teardown verify."""

@@ -54,7 +54,7 @@ _GONE = ("404", "410", "not found", "notfound", "no_such", "does not exist")
 _AUTH = ("401", "403", "forbidden", "unauthor")
 
 
-def leaked_ids(ledger_path: str | Path) -> set[int]:
+def leaked_ids(ledger_path: str | Path) -> set[str]:
     """Instance ids a ledger rented/saw-running but never CONFIRMED destroyed.
 
     Pure (no network): the suspect set to intersect with what's actually live.
@@ -64,10 +64,15 @@ def leaked_ids(ledger_path: str | Path) -> set[int]:
     and counting those as gone would make ledger-scoped reaping miss exactly the
     leaks it exists to catch. Erring toward "still leaked" is safe: reap()
     intersects this set with what's actually live, so a box that really is gone
-    just won't be a target. Non-numeric ids (other providers) are skipped.
+    just won't be a target.
+
+    Ids are kept as **strings** so the diff is provider-agnostic -- Vast ids are
+    numeric, RunPod pod ids are not -- and `reap` compares `str(instance.id)`
+    against this set. A ledger is single-provider (one campaign), so there is no
+    cross-provider mixing to filter out.
     """
-    seen: set[int] = set()
-    confirmed_gone: set[int] = set()
+    seen: set[str] = set()
+    confirmed_gone: set[str] = set()
     p = Path(ledger_path)
     if not p.exists():
         return set()
@@ -82,10 +87,7 @@ def leaked_ids(ledger_path: str | Path) -> set[int]:
         iid = ev.get("instance_id")
         if iid is None:
             continue
-        try:
-            iid = int(iid)
-        except (TypeError, ValueError):
-            continue                                    # string ids (other providers)
+        iid = str(iid)
         evt = ev.get("event")
         if evt in ("rented", "running"):
             seen.add(iid)
@@ -147,7 +149,7 @@ def _classify(exc: Exception) -> str:
     return "transient"
 
 
-def _destroy_with_retry(provider, iid: int, retries: int = 4) -> str:
+def _destroy_with_retry(provider, iid, retries: int = 4) -> str:
     """Idempotent destroy. Returns 'destroyed' | 'gone' (already absent, success)
     | 'failed'. Retries only TRANSIENT errors; an already-gone instance is the
     desired state (no wasted backoff), and auth/permission fails fast."""
@@ -177,8 +179,10 @@ def reap(provider, *, ledger: str | Path | None = None,
     """List live instances, destroy the targeted ones (unless dry_run).
 
     provider: anything with ``list_instances() -> [Instance(id,status,dph,raw)]``
-    and ``destroy(id)`` (a VastProvider, or a fake in tests). Pass ``live`` to
-    reuse an already-fetched listing (avoids a second API call + TOCTOU).
+    and ``destroy(id)`` (a VastProvider, a RunPodProvider, or a fake in tests).
+    Pass ``live`` to reuse an already-fetched listing (avoids a 2nd API call +
+    TOCTOU). Ids are matched as **strings** (Vast numeric, RunPod not) but the
+    report and the destroy call use each instance's native id.
 
     Filters are ANDed (each only narrows the target set, never widens it):
     ``ledger`` keeps this campaign's leaked-and-still-live instances; ``label``
@@ -193,7 +197,7 @@ def reap(provider, *, ledger: str | Path | None = None,
     targets = list(live)
     if ledger is not None:
         leaked = leaked_ids(ledger)
-        targets = [i for i in targets if int(i.id) in leaked]
+        targets = [i for i in targets if str(i.id) in leaked]
     if label is not None:
         targets = [i for i in targets if _label_of(i) == label]
     if older_than is not None:
@@ -210,13 +214,28 @@ def reap(provider, *, ledger: str | Path | None = None,
     if dry_run or not targets:
         return report
     for i in targets:
-        status = _destroy_with_retry(provider, int(i.id), retries=retries)
-        report[status].append(int(i.id))           # destroyed | gone | failed
+        status = _destroy_with_retry(provider, i.id, retries=retries)
+        report[status].append(i.id)                # native id (int vast / str runpod)
     return report
 
 
+def _make_provider(name: str):
+    """Instantiate a Provider by name -- the multi-cloud reaper's seam. Imports
+    lazily so reaping Vast doesn't require RunPod's module (or vice versa)."""
+    if name == "vast":
+        from jax_solitons.campaign.vast import VastProvider
+        return VastProvider()
+    if name == "runpod":
+        from jax_solitons.campaign.runpod import RunPodProvider
+        return RunPodProvider()
+    raise ValueError(f"unknown --provider {name!r} (expected: vast, runpod)")
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Reap orphaned Vast instances.")
+    ap = argparse.ArgumentParser(description="Reap orphaned cloud instances.")
+    ap.add_argument("--provider", default="vast", choices=("vast", "runpod"),
+                    help="which cloud to reap (default: vast). Modal is serverless "
+                         "-- nothing to reap.")
     ap.add_argument("--ledger", default=None,
                     help="RECOMMENDED scope: only reap instances this ledger "
                          "leaked (rented/running minus destroyed), still live")
@@ -243,8 +262,7 @@ def main(argv=None) -> int:
         print(f"invalid --older-than {args.older_than!r}: {e}")
         return 2
 
-    from jax_solitons.campaign.vast import VastProvider
-    provider = VastProvider()
+    provider = _make_provider(args.provider)
 
     live = provider.list_instances()                # fetch ONCE, reuse below
     # `is not None` (not truthiness) so the displayed scope matches the actual

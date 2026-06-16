@@ -58,7 +58,7 @@ def test_leaked_ids_diffs_rented_minus_destroyed(tmp_path):
         {"event": "destroyed", "instance_id": 2, "verify": "gone"},
         {"event": "rented", "instance_id": 3},
     ])
-    assert leaked_ids(led) == {1, 3}
+    assert leaked_ids(led) == {"1", "3"}             # string ids (provider-agnostic)
 
 
 def test_leaked_ids_missing_file_is_empty(tmp_path):
@@ -76,16 +76,18 @@ def test_leaked_ids_failed_teardown_stays_leaked(tmp_path):
         {"event": "rented", "instance_id": 6},
         {"event": "destroyed", "instance_id": 6, "verify": "gone"},
     ])
-    assert leaked_ids(led) == {5}                    # 5 failed teardown; 6 confirmed gone
+    assert leaked_ids(led) == {"5"}                  # 5 failed teardown; 6 confirmed gone
 
 
-def test_leaked_ids_skips_nonnumeric_ids(tmp_path):
+def test_leaked_ids_keeps_string_ids(tmp_path):
+    # ids are normalized to strings so the diff works for non-numeric (RunPod) ids
+    # too; a ledger is single-provider, so there is no cross-provider mixing.
     from jax_solitons.campaign.reap import leaked_ids
     led = _ledger(tmp_path, [
-        {"event": "rented", "instance_id": "i-abc"},  # string id (other provider)
-        {"event": "rented", "instance_id": 7},
+        {"event": "rented", "instance_id": "pod-abc"},  # RunPod-style string id
+        {"event": "rented", "instance_id": 7},          # Vast-style numeric id
     ])
-    assert leaked_ids(led) == {7}                    # didn't crash; skipped the string id
+    assert leaked_ids(led) == {"pod-abc", "7"}
 
 
 # -- targeting / scope --------------------------------------------------------
@@ -210,6 +212,30 @@ def test_instance_age_naive_iso_is_utc():
         raw = {"created_at": "2020-01-01T00:00:00"}              # naive -> UTC
     # one hour after that instant, age should be ~3600 regardless of $TZ
     assert abs(_instance_age_s(I(), now=1577836800 + 3600) - 3600) < 1
+
+
+def test_reap_string_ids_ledger_scope(tmp_path):
+    """RunPod-style non-numeric ids flow through the whole reap path (#45)."""
+    from jax_solitons.campaign.reap import reap
+    led = _ledger(tmp_path, [
+        {"event": "rented", "instance_id": "pod-a"},
+        {"event": "rented", "instance_id": "pod-b"},
+        {"event": "destroyed", "instance_id": "pod-b", "verify": "gone"},
+    ])
+    p = _FakeProvider(["pod-a", "pod-c"])            # leaked={a,b}, live={a,c}
+    rep = reap(p, ledger=led, dry_run=False)
+    assert rep["destroyed"] == ["pod-a"]            # str id in report, pod-c untouched
+    assert p.destroyed == ["pod-a"]
+
+
+def test_main_provider_runpod_routes_via_factory(monkeypatch, tmp_path):
+    """--provider runpod reaps through the (mocked) RunPod provider, string ids."""
+    from jax_solitons.campaign import reap as reapmod
+    led = _ledger(tmp_path, [{"event": "rented", "instance_id": "pod-a"}])
+    p = _FakeProvider(["pod-a", "pod-z"])
+    monkeypatch.setattr(reapmod, "_make_provider", lambda name: p)
+    rc = reapmod.main(["--provider", "runpod", "--ledger", str(led), "--yes"])
+    assert rc == 0 and p.destroyed == ["pod-a"]     # pod-z not leaked -> spared
 
 
 def test_reap_reuses_prefetched_live_no_extra_list_call():
