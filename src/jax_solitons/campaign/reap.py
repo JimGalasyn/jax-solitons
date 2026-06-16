@@ -8,11 +8,15 @@ retry on transient errors so a network blip can't strand the cleanup the way it
 stranded the rental. Destroy is idempotent: an already-gone instance counts as
 success (that's the desired state), not a failure.
 
-Two scopes:
+Three scopes (the first two are safe under concurrent farming; --all is not):
   - --ledger PATH (recommended): only instances this campaign rented but never
     recorded destroyed (``rented``/``running`` minus ``destroyed``), intersected
     with what's actually still live -- safe when several sessions share one Vast
     account, since it won't touch instances this ledger never created.
+  - --label NAME: only instances stamped with that ``LaunchSpec.label`` at create
+    (the proactive-attribution half of orphan prevention) -- safe by the same
+    logic without needing the ledger file, so it reaps a crashed run's boxes from
+    any machine. Combine with --ledger to intersect (most restrictive).
   - --all: EVERY live instance on the account (the "clean slate" button). With
     concurrent farming this also kills other sessions' boxes -- hence opt-in.
 
@@ -21,6 +25,7 @@ unscoped all-account destroy additionally needs --all.
 
   python -m jax_solitons.campaign.reap                                 # list (dry run)
   python -m jax_solitons.campaign.reap --ledger out/vast_ledger.jsonl --yes
+  python -m jax_solitons.campaign.reap --label eps-kick-farm --yes     # by campaign label
   python -m jax_solitons.campaign.reap --all --yes                     # nuke everything
 """
 from __future__ import annotations
@@ -75,6 +80,13 @@ def leaked_ids(ledger_path: str | Path) -> set[int]:
     return seen - confirmed_gone
 
 
+def _label_of(inst) -> str | None:
+    """The campaign/run label stamped on an instance at create (`LaunchSpec.label`),
+    read from the provider's raw record; None if absent. Robust to a fake/Instance
+    that carries no `raw` (returns None -> never label-matched)."""
+    return (getattr(inst, "raw", None) or {}).get("label")
+
+
 def _classify(exc: Exception) -> str:
     """transient (retry) | gone (already destroyed -> success) | auth (terminal)."""
     s = str(exc).lower()
@@ -109,25 +121,30 @@ def _destroy_with_retry(provider, iid: int, retries: int = 4) -> str:
     return "failed"
 
 
-def reap(provider, *, ledger: str | Path | None = None, dry_run: bool = True,
+def reap(provider, *, ledger: str | Path | None = None,
+         label: str | None = None, dry_run: bool = True,
          retries: int = 4, live=None) -> dict:
     """List live instances, destroy the targeted ones (unless dry_run).
 
-    provider: anything with ``list_instances() -> [Instance(id,status,dph)]`` and
-    ``destroy(id)`` (a VastProvider, or a fake in tests). Pass ``live`` to reuse
-    an already-fetched listing (avoids a second API call + TOCTOU). With
-    ``ledger`` set, only reaps this campaign's leaked-and-still-live instances.
-    Returns a report dict; ``destroyed`` and ``gone`` are both successes (in the
-    desired state), ``failed`` is the only error bucket.
+    provider: anything with ``list_instances() -> [Instance(id,status,dph,raw)]``
+    and ``destroy(id)`` (a VastProvider, or a fake in tests). Pass ``live`` to
+    reuse an already-fetched listing (avoids a second API call + TOCTOU).
+
+    Scope filters are ANDed (each only narrows the target set, never widens it):
+    ``ledger`` keeps this campaign's leaked-and-still-live instances; ``label``
+    keeps instances stamped with that ``LaunchSpec.label``. With neither, the
+    scope is every live instance (the all-account clean slate). Returns a report
+    dict; ``destroyed`` and ``gone`` are both successes (in the desired state),
+    ``failed`` is the only error bucket.
     """
     if live is None:
         live = provider.list_instances()
-    live_ids = {int(i.id) for i in live}
+    targets = list(live)
     if ledger is not None:
-        target_ids = live_ids & leaked_ids(ledger)
-    else:
-        target_ids = set(live_ids)
-    targets = [i for i in live if int(i.id) in target_ids]
+        leaked = leaked_ids(ledger)
+        targets = [i for i in targets if int(i.id) in leaked]
+    if label is not None:
+        targets = [i for i in targets if _label_of(i) == label]
     dph = sum(float(getattr(i, "dph", 0) or 0) for i in targets)
 
     report = dict(live=len(live), targeted=len(targets), destroyed=[], gone=[],
@@ -145,6 +162,9 @@ def main(argv=None) -> int:
     ap.add_argument("--ledger", default=None,
                     help="RECOMMENDED scope: only reap instances this ledger "
                          "leaked (rented/running minus destroyed), still live")
+    ap.add_argument("--label", default=None,
+                    help="scope: only reap instances stamped with this "
+                         "LaunchSpec.label (safe, ledger-free, machine-independent)")
     ap.add_argument("--all", action="store_true", dest="all_scope",
                     help="scope = EVERY live instance on the account (also kills "
                          "other sessions' boxes); required for an unscoped destroy")
@@ -157,31 +177,39 @@ def main(argv=None) -> int:
     provider = VastProvider()
 
     live = provider.list_instances()                # fetch ONCE, reuse below
-    scope = f"ledger {args.ledger}" if args.ledger else "ALL live instances"
+    scope = " & ".join(
+        ([f"ledger {args.ledger}"] if args.ledger else [])
+        + ([f"label {args.label!r}"] if args.label else [])) or "ALL live instances"
     print(f"reap scope: {scope}")
     if not live:
         print("no live instances -- nothing to reap."); return 0
     for i in live:
-        print(f"  instance {i.id}  status={i.status}  ${float(i.dph or 0):.4f}/hr")
+        lbl = _label_of(i)
+        tag = f"  label={lbl}" if lbl else ""
+        print(f"  instance {i.id}  status={i.status}  ${float(i.dph or 0):.4f}/hr{tag}")
 
-    # safety gate: an unscoped (all-account) destroy must be explicit
-    if args.yes and args.ledger is None and not args.all_scope:
+    # safety gate: an unscoped (all-account) destroy must be explicit. A --label
+    # (or --ledger) scope is safe under concurrent farming, so it needs no --all.
+    if (args.yes and args.ledger is None and args.label is None
+            and not args.all_scope):
         print("\nREFUSING unscoped destroy: this would target ALL "
               f"{len(live)} live instances, including any concurrent session's "
-              "boxes. Re-run with --ledger <path> (safe) or --all (clean slate).")
+              "boxes. Re-run with --ledger <path> / --label <name> (safe) or "
+              "--all (clean slate).")
         return 2
 
-    rep = reap(provider, ledger=args.ledger, dry_run=not args.yes,
-               retries=args.retries, live=live)
+    rep = reap(provider, ledger=args.ledger, label=args.label,
+               dry_run=not args.yes, retries=args.retries, live=live)
     print(f"\nlive={rep['live']} targeted={rep['targeted']} "
           f"(~${rep['dph_reclaimed']:.3f}/hr)")
+    scoped = args.ledger is not None or args.label is not None
     if rep["dry_run"]:
         if rep["targeted"]:
-            scope_note = "" if args.ledger else "  [ALL-ACCOUNT scope]"
+            scope_note = "" if scoped else "  [ALL-ACCOUNT scope]"
             print(f"DRY RUN -- pass --yes to destroy {rep['targeted']} "
                   f"instance(s).{scope_note}")
         return 0
-    if args.ledger is None:
+    if not scoped:
         print("!! ALL-ACCOUNT scope: destroying every live instance !!")
     done = rep["destroyed"] + rep["gone"]
     print(f"cleared {len(done)} ({len(rep['destroyed'])} destroyed, "

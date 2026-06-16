@@ -8,6 +8,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ## [Unreleased]
 
 ### Added
+- **`reap --label NAME`** (#24) — a third reap scope: destroy only instances
+  stamped with that `LaunchSpec.label`. Safe under concurrent farming like
+  `--ledger` (no `--all` needed) but ledger-free, so a crashed run's boxes can be
+  reaped by campaign label from any machine. Scopes AND together (`--ledger` ∩
+  `--label`); the label is read from the instance's `raw` record. Completes the
+  proactive-attribution half of #24 (the `LaunchSpec.label` stamping shipped in
+  #33).
 - **`FleetExecutor`** (`campaign.fleet`, #25) — a parallel, one-rented-host-per-leg
   *script* fleet over any `Provider`. A fleet run is now data — a list of
   `FleetLeg(label, command, ship, fetch)` — instead of a forked driver, so the
