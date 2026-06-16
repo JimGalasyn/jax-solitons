@@ -306,7 +306,7 @@ def test_launch_label_is_passed_to_create(mk):
     def spy(method, url, key, payload=None, timeout=30, **kw):
         if method == "PUT" and "/asks/" in url:
             seen["label"] = payload.get("label")
-        return orig(method, url, key, payload, timeout)
+        return orig(method, url, key, payload, timeout, **kw)
     c = mk(spy)
     with c.rent(OFFER, LaunchSpec(image="img", onstart="cmd", label="farm-xyz")):
         pass

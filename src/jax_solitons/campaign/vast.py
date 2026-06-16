@@ -131,7 +131,8 @@ def _req(method: str, url: str, key: str, payload=None, timeout: float = 30,
     if data is not None:
         headers["Content-Type"] = "application/json"
     endpoint = url.split("?")[0]
-    for attempt in range(tries):
+    tries = max(1, tries)                       # at least one attempt; keeps the
+    for attempt in range(tries):                # post-loop raise genuinely unreachable
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -140,7 +141,9 @@ def _req(method: str, url: str, key: str, payload=None, timeout: float = 30,
         except urllib.error.HTTPError as e:
             if not (_transient(e, idempotent=idempotent) and attempt < tries - 1):
                 detail = e.read()[:200].decode(errors="replace")
+                e.close()
                 raise VastError(f"{method} {endpoint} -> HTTP {e.code}: {detail}")
+            e.close()                           # retrying: release the response fd
         except (urllib.error.URLError, socket.timeout, TimeoutError,
                 ConnectionError) as e:
             if not (_transient(e, idempotent=idempotent) and attempt < tries - 1):
@@ -148,7 +151,7 @@ def _req(method: str, url: str, key: str, payload=None, timeout: float = 30,
                 raise VastError(
                     f"{method} {endpoint} -> {type(e).__name__}: {reason}") from e
         time.sleep(min(_BACKOFF_CAP, _BACKOFF_BASE * (2 ** attempt)))
-    raise VastError(  # pragma: no cover  (loop returns or raises every path)
+    raise VastError(  # pragma: no cover  (tries>=1, so the loop returns or raises)
         f"{method} {endpoint} failed after {tries} tries")
 
 
