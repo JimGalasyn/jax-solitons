@@ -29,6 +29,7 @@ import contextlib
 import dataclasses
 import json
 import os
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -61,6 +62,50 @@ class VastError(RuntimeError):
     """A Vast API call failed (status quoted, key never echoed)."""
 
 
+# -- transient-fault retry (issue #23) ---------------------------------------
+# A single saturated local resolver (an OneDrive sync, a DNS storm) throws
+# EAI_AGAIN and made a whole 16-leg farm treat every rent as TERMINALLY failed
+# -- a 1-second retry would have made the storm invisible. So every Vast REST
+# call self-heals on a *transient* fault before giving up. The HTTP codes worth
+# retrying are the "try again" family; a 4xx (bad request / auth / 404) is
+# terminal and raises at once.
+_RETRY_HTTP = frozenset({408, 425, 429, 500, 502, 503, 504})
+_MAX_TRIES = 5
+_BACKOFF_BASE = 0.5              # 0.5, 1, 2, 4 s ... (capped)
+_BACKOFF_CAP = 8.0
+# Only a TEMPORARY resolver failure (EAI_AGAIN -- the "temporary failure in name
+# resolution" a saturated resolver throws) is worth retrying. A name that
+# genuinely doesn't resolve (EAI_NONAME / EAI_FAIL) is terminal: retrying it just
+# burns backoff and hides a misconfiguration. (EAI_AGAIN is POSIX-standard; the
+# getattr keeps this importable on a platform that somehow lacks it.)
+_TRANSIENT_GAIERROR = frozenset(
+    getattr(socket, n) for n in ("EAI_AGAIN",) if hasattr(socket, n))
+
+
+def _transient(exc: BaseException, *, idempotent: bool) -> bool:
+    """True if `exc` is a transient transport fault worth retrying.
+
+    The `idempotent` distinction is a cost-safety invariant, not a nicety: a
+    TEMPORARY DNS failure (`socket.gaierror` with EAI_AGAIN, the "temporary
+    failure in name resolution" a saturated resolver throws) happens BEFORE the
+    request reaches Vast, so the server never acted on it and retrying is always
+    safe -- even a non-idempotent `create`. Only EAI_AGAIN qualifies; a name that
+    genuinely doesn't resolve (EAI_NONAME/EAI_FAIL) is terminal. A post-connection
+    fault (reset, read timeout, 5xx) might mean the request WAS received and acted
+    on, so it is retried only for idempotent calls; retrying a `create` that
+    actually succeeded would rent a second GPU that bills by the second (the very
+    leak the Provider contract exists to prevent)."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return idempotent and exc.code in _RETRY_HTTP
+    if isinstance(exc, urllib.error.URLError):
+        if isinstance(exc.reason, socket.gaierror):
+            return exc.reason.errno in _TRANSIENT_GAIERROR   # EAI_AGAIN: pre-send
+        return idempotent                    # connect/read transport fault
+    if isinstance(exc, (socket.timeout, TimeoutError, ConnectionError)):
+        return idempotent
+    return False
+
+
 # `HostProbeFailed` is the campaign-wide failover signal (campaign.protocols),
 # imported above so every Provider raises the SAME exception the executor
 # fails over on -- not a Vast-private subclass.
@@ -79,19 +124,44 @@ def _read_key(explicit: str | None = None) -> str:
         "no Vast API key: set $VAST_API_KEY or write ~/.config/vastai/vast_api_key")
 
 
-def _req(method: str, url: str, key: str, payload=None, timeout: float = 30):
+def _req(method: str, url: str, key: str, payload=None, timeout: float = 30,
+         *, idempotent: bool = True, tries: int = _MAX_TRIES):
+    """One Vast REST call, self-healing on transient transport faults (#23).
+
+    Retries `tries` times with exponential backoff on a transient fault (DNS
+    EAI_AGAIN, connection reset, read timeout, 5xx); a terminal 4xx raises at
+    once. `idempotent=False` (used only by `create`) narrows the retry to
+    pre-send DNS failures so a half-completed create can't double-rent. On
+    exhaustion the last fault is wrapped in `VastError` -- a raw `URLError` no
+    longer escapes to callers, so every network failure looks the same to the
+    executor's failover path."""
     data = json.dumps(payload).encode() if payload is not None else None
     headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
     if data is not None:
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read()
-            return json.loads(body) if body else {}
-    except urllib.error.HTTPError as e:
-        detail = e.read()[:200].decode(errors="replace")
-        raise VastError(f"{method} {url.split('?')[0]} -> HTTP {e.code}: {detail}")
+    endpoint = url.split("?")[0]
+    tries = max(1, tries)                       # at least one attempt; keeps the
+    for attempt in range(tries):                # post-loop raise genuinely unreachable
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read()
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as e:
+            if not (_transient(e, idempotent=idempotent) and attempt < tries - 1):
+                detail = e.read()[:200].decode(errors="replace")
+                e.close()
+                raise VastError(f"{method} {endpoint} -> HTTP {e.code}: {detail}")
+            e.close()                           # retrying: release the response fd
+        except (urllib.error.URLError, socket.timeout, TimeoutError,
+                ConnectionError) as e:
+            if not (_transient(e, idempotent=idempotent) and attempt < tries - 1):
+                reason = getattr(e, "reason", e)
+                raise VastError(
+                    f"{method} {endpoint} -> {type(e).__name__}: {reason}") from e
+        time.sleep(min(_BACKOFF_CAP, _BACKOFF_BASE * (2 ** attempt)))
+    raise VastError(  # pragma: no cover  (tries>=1, so the loop returns or raises)
+        f"{method} {endpoint} failed after {tries} tries")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -217,7 +287,10 @@ class VastProvider:
                 f"another Provider cannot be rented through VastProvider")
         blob = {"client_id": "me", "image": image, "env": {}, "disk": disk,
                 "label": label, "onstart": onstart_cmd, "runtype": runtype}
-        res = _req("PUT", f"{V0}/asks/{ask_id}/", self.key, blob)
+        # idempotent=False: a create that the server received but whose response
+        # was lost would, on retry, rent a SECOND GPU. So only pre-send DNS
+        # failures retry here (see `_transient`); any post-connect fault fails.
+        res = _req("PUT", f"{V0}/asks/{ask_id}/", self.key, blob, idempotent=False)
         new_id = res.get("new_contract") or res.get("id")
         if not new_id:
             raise VastError(f"create returned no instance id: {res}")
@@ -292,7 +365,8 @@ class VastProvider:
         """
         t0 = time.monotonic()
         instance_id = self.create(offer.id, image=launch.image,
-                                   onstart_cmd=launch.onstart, disk=launch.disk_gb)
+                                   onstart_cmd=launch.onstart, disk=launch.disk_gb,
+                                   label=launch.label)
         self._log("rented", provider=self.name, offer_id=offer.id,
                   instance_id=instance_id, gpu=offer.gpu_name, dph=offer.dph,
                   reliability=offer.reliability,
