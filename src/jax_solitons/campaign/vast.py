@@ -41,6 +41,7 @@ from jax_solitons.campaign.protocols import (
     LaunchSpec,
     Offer,
     RentedHost,
+    RentUnavailable,
 )
 
 V0 = "https://console.vast.ai/api/v0"
@@ -348,6 +349,25 @@ class VastProvider:
     def destroy(self, instance_id: int) -> None:
         _req("DELETE", f"{V0}/instances/{instance_id}/", self.key, {})
 
+    def dead_reason(self, instance_id: int | str) -> str | None:
+        """A non-None reason if this instance has VISIBLY failed -- it flipped to
+        error/exited, or its status_msg matches a known bad-host signature -- else
+        None (still coming up, or a transient status hiccup we shouldn't fail
+        over on). Lets a readiness loop fast-fail a corpse (a container that never
+        came up) in seconds instead of ssh-polling it for the full deadline (#27).
+        Keeps the bad-host string matching here in the adapter so an executor's
+        fast-fail stays provider-agnostic (it just asks `dead_reason`)."""
+        try:
+            inst = self.status(int(instance_id))
+        except Exception:
+            return None                       # transient status read: don't fail over
+        if inst.status in ("error", "exited"):
+            return f"instance {instance_id} -> {inst.status}"
+        msg = str(inst.raw.get("status_msg") or "")
+        if any(s in msg.lower() for s in _BAD_HOST_SIGNS):
+            return f"bad host (instance {instance_id}): {msg[:160]}"
+        return None
+
     # -- the safety primitive (the Provider F invariant) ---------------------
     @contextlib.contextmanager
     def rent(self, offer: Offer, launch: LaunchSpec, *, timeout_s: float = 600):
@@ -364,9 +384,17 @@ class VastProvider:
         usable, so the executor can fail over to the next offer.
         """
         t0 = time.monotonic()
-        instance_id = self.create(offer.id, image=launch.image,
-                                   onstart_cmd=launch.onstart, disk=launch.disk_gb,
-                                   label=launch.label)
+        # create runs BEFORE the try/finally: if it fails no instance exists, so
+        # there is nothing to tear down. A create failure is an offer race (taken
+        # between offers() and rent()) or a transient that outlived _req's retry;
+        # surface it as RentUnavailable so the executor fails over provider-
+        # agnostically, never as a leak.
+        try:
+            instance_id = self.create(offer.id, image=launch.image,
+                                       onstart_cmd=launch.onstart,
+                                       disk=launch.disk_gb, label=launch.label)
+        except VastError as e:
+            raise RentUnavailable(f"could not rent offer {offer.id}: {e}") from e
         self._log("rented", provider=self.name, offer_id=offer.id,
                   instance_id=instance_id, gpu=offer.gpu_name, dph=offer.dph,
                   reliability=offer.reliability,

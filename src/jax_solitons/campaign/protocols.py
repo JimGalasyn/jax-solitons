@@ -308,6 +308,17 @@ class HostProbeFailed(RuntimeError):
     offer rather than running work on it."""
 
 
+class RentUnavailable(RuntimeError):
+    """An offer could NOT be rented -- it was taken between `offers()` and
+    `rent()` (a marketplace race), or the create call failed before any instance
+    existed. Distinct from `HostProbeFailed` (a host that came up but is
+    unusable) and from a leak (`rent` raises loudly on that): an unavailable
+    offer never created an instance, so there is nothing to tear down and the
+    executor simply fails over to the next offer. Providers raise this for the
+    pre-instance create failure so an executor's failover path stays
+    provider-agnostic (no need to string-match a provider-specific error)."""
+
+
 @runtime_checkable
 class Provider(Protocol):
     """A pluggable cloud broker: list offers, rent one, ALWAYS tear it down (F).
