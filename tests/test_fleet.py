@@ -14,8 +14,9 @@ import pytest
 
 import jax_solitons.campaign.fleet as fleet
 from jax_solitons.campaign import (FleetExecutor, FleetLeg, HostProbeFailed,
-                                   HostSpec, LaunchSpec, Offer, RentedHost,
-                                   RentUnavailable, SentinelReady, fleet_status)
+                                   HostSpec, LaunchSpec, LegResult, Offer,
+                                   RentedHost, RentUnavailable, SentinelReady,
+                                   fleet_status)
 
 LAUNCH = LaunchSpec(image="img:12.2", onstart="echo hi", disk_gb=24, label="farm-x")
 SPEC = HostSpec(gpu_name="RTX 3090", max_dph=0.30)
@@ -281,3 +282,121 @@ def test_fleet_status_reports_live_and_spend(tmp_path):
     assert snap["live_dph"] == 0.2 and len(snap["live"]) == 1
     assert snap["ledger"]["total_est_cost_usd"] == 0.05
     assert snap["ledger"]["by_outcome"] == {"ok": 1}
+
+
+def test_launch_jitter_staggers_starts(monkeypatch, tmp_path):
+    """With jitter on, the i-th leg of a wave waits i*jitter before renting (#29)."""
+    sleeps = []
+    monkeypatch.setattr(fleet.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(fleet, "_scp_up", lambda *a, **k: (0, ""))
+    monkeypatch.setattr(fleet, "_scp_down", lambda *a, **k: (0, ""))
+    monkeypatch.setattr(fleet, "_ssh", _fake_ssh_factory(ready=True))
+    ex = FleetExecutor(FakeProvider([_offer("a"), _offer("b")]), LAUNCH,
+                       local_out_dir=str(tmp_path), host_spec=SPEC, jitter_s=0.01,
+                       ready_timeout=0.2, ready_poll_s=0, max_parallel=4,
+                       log=lambda *_a: None)
+    ex.run([_leg("L0"), _leg("L1")])
+    assert any(s > 0 for s in sleeps)                      # at least one staggered
+
+
+def test_legresult_ok_flag():
+    assert LegResult("x", "OK").ok and LegResult("x", "SKIP").ok
+    assert not LegResult("x", "RUN_FAIL").ok
+
+
+def test_ship_failure_fails_over(monkeypatch, tmp_path):
+    """A failed scp-up of the driver is a host problem -> fail over (#25)."""
+    monkeypatch.setattr(fleet.time, "sleep", lambda s: None)
+    monkeypatch.setattr(fleet, "_scp_down", lambda *a, **k: (0, ""))
+    monkeypatch.setattr(fleet, "_scp_up", lambda *a, **k: (1, "scp boom"))
+    monkeypatch.setattr(fleet, "_ssh", _fake_ssh_factory(ready=True))
+    prov = FakeProvider([_offer("a")])
+    [r] = _exec(prov, tmp_path, max_refills=0).run([_leg("L1")])
+    assert r.status == "NO_OFFERS" and prov.live == {}     # ship failed -> drained
+
+
+class _RaiseProvider(FakeProvider):
+    """rent() raises a non-failover error on __enter__ (terminal)."""
+
+    def __init__(self, offers, msg):
+        super().__init__(offers)
+        self._msg = msg
+
+    @contextlib.contextmanager
+    def rent(self, offer, launch, *, timeout_s=600):
+        self.rented.append(offer.id)
+        raise RuntimeError(self._msg)
+        yield  # pragma: no cover  (unreachable; makes this a generator cm)
+
+
+def test_generic_error_is_terminal(patched, tmp_path):
+    patched(ready=True)
+    prov = _RaiseProvider([_offer("a")], "kaboom")
+    [r] = _exec(prov, tmp_path).run([_leg("L1")])
+    assert r.status == "ERROR" and "kaboom" in r.detail
+
+
+def test_leak_surfaces_as_leak_status(patched, tmp_path):
+    patched(ready=True)
+    prov = _RaiseProvider([_offer("a")], "LEAK RISK: instance 9 not torn down")
+    [r] = _exec(prov, tmp_path).run([_leg("L1")])
+    assert r.status == "LEAK"
+
+
+def test_destroy_live_no_destroy_method_is_noop(tmp_path):
+    class NoDestroy:
+        name = "nd"
+        def offers(self, spec):
+            return []
+    ex = _exec(NoDestroy(), tmp_path)
+    ex._track("1")
+    ex._destroy_live()                                     # no destroy attr -> no-op
+
+
+def test_destroy_live_logs_on_failure(tmp_path):
+    msgs = []
+
+    class FailDestroy(FakeProvider):
+        def destroy(self, iid):
+            raise RuntimeError("nope")
+    ex = FleetExecutor(FailDestroy([_offer("a")]), LAUNCH,
+                       local_out_dir=str(tmp_path), log=msgs.append)
+    ex._track("1000")
+    ex._destroy_live()
+    assert any("FAILED to destroy" in m for m in msgs)
+
+
+def test_signal_handle_default_raises_keyboardinterrupt(tmp_path):
+    ex = _exec(FakeProvider([_offer("a")]), tmp_path)
+    guard = fleet._SignalGuard(ex)
+    guard._prev = {signal.SIGTERM: signal.SIG_DFL}         # not callable -> default
+    with pytest.raises(KeyboardInterrupt):
+        guard._handle(signal.SIGTERM, None)
+
+
+def test_signal_guard_exit_skips_none_prev(tmp_path):
+    ex = _exec(FakeProvider([_offer("a")]), tmp_path)
+    guard = fleet._SignalGuard(ex)
+    guard._prev = {signal.SIGTERM: None}                   # was set from C
+    guard.__exit__()                                       # must not raise
+
+
+def test_fleet_status_single_source(tmp_path):
+    from jax_solitons.campaign.vast import VastLedger
+    prov = FakeProvider([_offer("a")])
+    prov.live["1"] = _offer("a", dph=0.1)
+    assert "ledger" not in fleet_status(prov, None)
+    led = VastLedger(tmp_path / "l.jsonl")
+    assert "live" not in fleet_status(None, led)
+
+
+def test_status_format_variants():
+    from jax_solitons.campaign.status import _format
+    assert "no provider" in _format({})
+    s = _format({"live": [], "live_dph": 0.0,
+                 "ledger": {"rentals": 0, "total_billed_min": 0,
+                            "total_est_cost_usd": 0.0, "by_outcome": {}}})
+    assert "none" in s and "LEDGER" in s
+    s2 = _format({"live": [{"id": 5, "status": "running", "dph": 0.2}],
+                  "live_dph": 0.2})
+    assert "0.200/hr" in s2
