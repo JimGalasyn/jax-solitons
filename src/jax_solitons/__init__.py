@@ -3,7 +3,7 @@
 Pre-alpha. The API will change without notice until 0.1.
 """
 
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 
 from jax_solitons.grid import BoxGrid
 from jax_solitons.model import EnergyTerm, Model
