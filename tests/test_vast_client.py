@@ -12,6 +12,7 @@ from jax_solitons.campaign.vast import (
     HostProbeFailed,
     HostSpec,
     LaunchSpec,
+    LeakRisk,
     Offer,
     RentedHost,
     VastClient,
@@ -28,11 +29,12 @@ class FakeVast:
     """Scriptable replacement for vast._req, routing by (method, url)."""
 
     def __init__(self, *, start_status="running", status_msg="",
-                 destroy_fail=False, destroy_noop=False,
+                 destroy_fail=False, destroy_noop=False, destroy_404=False,
                  ssh_host="1.2.3.4", ssh_port=22000):
         self.inst = {}                       # id -> instance dict
         self.start_status, self.status_msg = start_status, status_msg
         self.destroy_fail, self.destroy_noop = destroy_fail, destroy_noop
+        self.destroy_404 = destroy_404       # box gone, but DELETE returns HTTP 404
         self.ssh_host, self.ssh_port = ssh_host, ssh_port
         self.offers = [
             dict(id=111, dph_total=0.15, gpu_name="RTX 3090", num_gpus=1,
@@ -55,6 +57,12 @@ class FakeVast:
             iid = int(url.split("/instances/")[1].split("/")[0])
             return {"instances": self.inst.get(iid, {})}
         if method == "DELETE" and "/instances/" in url:
+            if self.destroy_404:             # already gone: API 404s, box IS absent
+                iid = int(url.split("/instances/")[1].split("/")[0])
+                self.inst.pop(iid, None)
+                err = VastError("DELETE .../ -> HTTP 404: instance not found")
+                err.code = 404
+                raise err
             if self.destroy_fail:
                 raise VastError("destroy boom")
             if not self.destroy_noop:
@@ -122,7 +130,7 @@ def test_create_rejects_non_int_offer_id_as_vast_error(mk):
 def test_rent_raises_loudly_on_failed_destroy(mk, tmp_path):
     led = VastLedger(tmp_path / "l.jsonl")
     c = mk(FakeVast(start_status="running", destroy_fail=True), ledger=led)
-    with pytest.raises(VastError, match="LEAK RISK"):
+    with pytest.raises(LeakRisk, match="LEAK RISK"):
         with c.rent(OFFER, LAUNCH, timeout_s=5):
             pass
     d = next(e for e in led.events() if e["event"] == "destroyed")
@@ -132,9 +140,21 @@ def test_rent_raises_loudly_on_failed_destroy(mk, tmp_path):
 def test_rent_raises_when_instance_still_present(mk):
     # destroy "succeeds" but the instance never leaves the list -> confirmed leak
     c = mk(FakeVast(start_status="running", destroy_noop=True))
-    with pytest.raises(VastError, match="LEAK RISK"):
+    with pytest.raises(LeakRisk, match="LEAK RISK"):
         with c.rent(OFFER, LAUNCH, timeout_s=5):
             pass
+
+
+def test_rent_already_gone_404_destroy_is_success_not_leak(mk, tmp_path):
+    """A 404 on destroy means the box is already gone -- the DESIRED state. It must
+    count as torn down (no retry against a nonexistent instance, no spurious
+    LeakRisk), with verify confirming gone (CM review #48)."""
+    led = VastLedger(tmp_path / "l.jsonl")
+    c = mk(FakeVast(start_status="running", destroy_404=True), ledger=led)
+    with c.rent(OFFER, LAUNCH, timeout_s=5):        # must NOT raise LeakRisk
+        pass
+    d = next(e for e in led.events() if e["event"] == "destroyed")
+    assert d["destroyed"] is True and d["verify"] == "gone"
 
 
 def test_wait_running_bails_on_bad_host(mk):

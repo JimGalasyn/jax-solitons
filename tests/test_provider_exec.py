@@ -32,11 +32,13 @@ class FakeProvider:
 
     name = "fake"
 
-    def __init__(self, offers, bad_ids=()):
+    def __init__(self, offers, bad_ids=(), dead_ids=()):
         self._offers = list(offers)
         self._bad = set(bad_ids)
+        self._dead = set(dead_ids)            # hosts dead_reason will flag dead
         self.live: set[str] = set()
         self.rented: list[str] = []
+        self._inst_offer: dict[str, str] = {}
         self._n = 0
 
     def offers(self, spec):
@@ -46,6 +48,7 @@ class FakeProvider:
     def rent(self, offer, launch, *, timeout_s=600):
         iid = f"inst-{self._n}"; self._n += 1
         self.rented.append(offer.id); self.live.add(iid)
+        self._inst_offer[iid] = offer.id
         try:
             if offer.id in self._bad:
                 raise HostProbeFailed(f"bad host {offer.id}")
@@ -53,6 +56,10 @@ class FakeProvider:
                              offer=offer)
         finally:
             self.live.discard(iid)            # leak-proof teardown
+
+    def dead_reason(self, instance_id):
+        oid = self._inst_offer.get(str(instance_id))
+        return f"dead host {oid}" if oid in self._dead else None
 
 
 def _fake_ssh_factory(*, ready=True, run_rc=0, worker_out=None):
@@ -107,7 +114,7 @@ def test_engine_never_ready_fails_over_then_raises(patched):
     prov = FakeProvider([_offer("a"), _offer("b")])
     ex = ProviderExecutor(prov, "pkg.mod:fn", LAUNCH, host_spec=SPEC,
                           ready_timeout=0.05)
-    with pytest.raises(RuntimeError, match="all .* offers failed"):
+    with pytest.raises(RuntimeError, match="all .* offer attempt"):
         ex.run(CONFIGS)
     assert prov.rented == ["a", "b"]           # tried both, both timed out ready
     assert prov.live == set()                  # neither leaked
@@ -151,3 +158,44 @@ def test_empty_configs_is_noop(patched):
     prov = FakeProvider([_offer("a")])
     assert ProviderExecutor(prov, "pkg.mod:fn", LAUNCH).run([]) == []
     assert prov.rented == []                    # never even rented
+
+
+def test_max_attempts_caps_the_failover_walk(patched):
+    """A marketplace of marginal hosts must not grind for days: the failover walk
+    stops after max_attempts offers, not all of them (CM #48)."""
+    patched(ready=False)                        # every host fails the ready probe
+    prov = FakeProvider([_offer(f"o{i}") for i in range(10)])
+    ex = ProviderExecutor(prov, "pkg.mod:fn", LAUNCH, host_spec=SPEC,
+                          ready_timeout=0.02, max_attempts=3)
+    with pytest.raises(RuntimeError, match="offer attempt"):
+        ex.run(CONFIGS)
+    assert prov.rented == ["o0", "o1", "o2"]    # capped at 3, not all 10
+
+
+def test_mid_run_failover_on_confirmed_host_death(patched, monkeypatch):
+    """A config error on a host that `dead_reason` confirms is dead fails over to a
+    fresh host and re-runs, instead of absorbing the death as per-config errors and
+    hammering the corpse for the remaining configs (CM #48)."""
+    monkeypatch.setattr(pe.time, "sleep", lambda s: None)
+    monkeypatch.setattr(pe, "_scp_down", lambda *a, **k: (0, ""))
+    calls = {"n": 0}
+
+    def stateful_ssh(key, host, port, cmd, timeout=120):
+        if "import jax_solitons" in cmd:
+            return (0, "")
+        if "campaign.worker" in cmd:
+            calls["n"] += 1
+            if calls["n"] == 1:                 # first host errors as it dies
+                return (1, "boom -- no result line")
+            rec = {"run": "r", "result": {"ok": True}, "skipped": False}
+            return (0, RESULT_PREFIX + json.dumps(rec) + "\n")
+        return (0, "")
+
+    monkeypatch.setattr(pe, "_ssh", stateful_ssh)
+    prov = FakeProvider([_offer("dead"), _offer("good")], dead_ids={"dead"})
+    ex = ProviderExecutor(prov, "pkg.mod:fn", LAUNCH, host_spec=SPEC,
+                          ready_timeout=0.2)
+    results = ex.run(CONFIGS)
+    assert prov.rented == ["dead", "good"]      # failed over past the dead host
+    assert all(r.get("result") for r in results)  # re-ran clean on the good host
+    assert prov.live == set()                   # both torn down

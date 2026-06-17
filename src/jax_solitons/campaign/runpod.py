@@ -43,6 +43,7 @@ from jax_solitons.campaign.protocols import (
     HostProbeFailed,
     HostSpec,
     LaunchSpec,
+    LeakRisk,
     Offer,
     RentedHost,
 )
@@ -75,7 +76,13 @@ class Pod:
 
 
 class RunPodError(RuntimeError):
-    """A RunPod API call failed (status quoted, key never echoed)."""
+    """A RunPod API call failed (status quoted, key never echoed).
+
+    `code` carries the HTTP status on an HTTP error (None for transport/GraphQL),
+    so teardown can treat a 404/410 (pod already gone) as success instead of
+    retrying a nonexistent pod and raising a spurious leak (CM review #48)."""
+
+    code: int | None = None
 
 
 def _read_key(explicit: str | None = None) -> str:
@@ -113,7 +120,9 @@ def _req(method: str, url: str, key: str, payload=None, timeout: float = 30):  #
             return json.loads(body) if body else {}
     except urllib.error.HTTPError as e:
         detail = e.read()[:200].decode(errors="replace")
-        raise RunPodError(f"{method} {url.split('?')[0]} -> HTTP {e.code}: {detail}")
+        err = RunPodError(f"{method} {url.split('?')[0]} -> HTTP {e.code}: {detail}")
+        err.code = e.code                                # structured status for callers
+        raise err from None
 
 
 class RunPodProvider:
@@ -355,6 +364,11 @@ class RunPodProvider:
                     self.terminate(pod_id)
                     destroyed = True
                     break
+                except RunPodError as e:
+                    if e.code in (404, 410):            # already gone = desired state
+                        destroyed = True
+                        break
+                    time.sleep(2)
                 except Exception:
                     time.sleep(2)
             try:
@@ -367,7 +381,10 @@ class RunPodProvider:
                       est_cost_usd=round(offer.dph * billed_s / 3600, 4),
                       destroyed=destroyed, verify=verify)
             if not destroyed or verify == "present":
-                raise RunPodError(
+                raise LeakRisk(                        # structured (not stringly-typed)
                     f"LEAK RISK: pod {pod_id} not confirmed terminated "
                     f"(destroyed={destroyed}, verify={verify}) -- "
                     f"terminate it at https://console.runpod.io/pods")
+            if verify.startswith("unverified"):              # pragma: no cover
+                print(f"  ~ pod {pod_id}: terminated but teardown UNVERIFIED "
+                      f"({verify[:80]}) -- confirm it is gone.")

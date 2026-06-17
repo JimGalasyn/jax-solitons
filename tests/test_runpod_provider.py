@@ -17,7 +17,13 @@ from jax_solitons.campaign import (
     RentedHost,
     VastLedger,
 )
-from jax_solitons.campaign.runpod import GQL, REST, RunPodError, RunPodProvider
+from jax_solitons.campaign.runpod import (
+    GQL,
+    REST,
+    LeakRisk,
+    RunPodError,
+    RunPodProvider,
+)
 
 LAUNCH = LaunchSpec(image="img:12.2", onstart="echo hi", disk_gb=24)
 
@@ -35,9 +41,11 @@ class FakeRunPod:
     """Scriptable replacement for runpod._req, routing by (method, url)."""
 
     def __init__(self, *, status="RUNNING", ip="1.2.3.4", port=40022,
-                 delete_fail=False, delete_noop=False, gql_errors=None):
+                 delete_fail=False, delete_noop=False, delete_404=False,
+                 gql_errors=None):
         self.status, self.ip, self.port = status, ip, port
         self.delete_fail, self.delete_noop = delete_fail, delete_noop
+        self.delete_404 = delete_404       # pod gone, but DELETE returns HTTP 404
         self.gql_errors = gql_errors
         self.pods: dict[str, dict] = {}    # id -> pod dict (the "live" set)
         self.last_create = None            # the create payload (for label tests)
@@ -62,6 +70,11 @@ class FakeRunPod:
             pid = url.rstrip("/").split("/pods/")[1]
             return self.pods.get(pid, self._pod(pid))
         if method == "DELETE" and "/pods/" in url:
+            if self.delete_404:                          # already gone: API 404s
+                self.pods.pop(url.rstrip("/").split("/pods/")[1], None)
+                err = RunPodError("DELETE /pods/.. -> HTTP 404: not found")
+                err.code = 404
+                raise err
             if self.delete_fail:
                 raise RunPodError("terminate boom")
             if not self.delete_noop:
@@ -154,7 +167,7 @@ def test_rent_happy_path_terminates_and_verifies_gone(mk, tmp_path):
 def test_rent_raises_loudly_on_failed_terminate(mk, tmp_path):
     led = VastLedger(tmp_path / "l.jsonl")
     p = mk(FakeRunPod(delete_fail=True), ledger=led)
-    with pytest.raises(RunPodError, match="LEAK RISK"):
+    with pytest.raises(LeakRisk, match="LEAK RISK"):
         with p.rent(_offer(), LAUNCH, timeout_s=5):
             pass
     d = next(e for e in led.events() if e["event"] == "destroyed")
@@ -164,9 +177,20 @@ def test_rent_raises_loudly_on_failed_terminate(mk, tmp_path):
 def test_rent_raises_when_pod_still_present(mk):
     # terminate "succeeds" but the pod never leaves the list -> confirmed leak
     p = mk(FakeRunPod(delete_noop=True))
-    with pytest.raises(RunPodError, match="LEAK RISK"):
+    with pytest.raises(LeakRisk, match="LEAK RISK"):
         with p.rent(_offer(), LAUNCH, timeout_s=5):
             pass
+
+
+def test_rent_already_gone_404_terminate_is_success_not_leak(mk, tmp_path):
+    """A 404 on terminate means the pod is already gone -- success, not a leak: no
+    retry against a nonexistent pod, no spurious LeakRisk (CM review #48)."""
+    led = VastLedger(tmp_path / "l.jsonl")
+    p = mk(FakeRunPod(delete_404=True), ledger=led)
+    with p.rent(_offer(), LAUNCH, timeout_s=5):     # must NOT raise LeakRisk
+        pass
+    d = next(e for e in led.events() if e["event"] == "destroyed")
+    assert d["destroyed"] is True and d["verify"] == "gone"
 
 
 def test_wait_running_bails_on_dead_status(mk):

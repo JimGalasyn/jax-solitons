@@ -19,11 +19,23 @@ robustness the farming session paid for is built in:
     race (`RentUnavailable`) -> pull the next offer;
   - **fast-fail a corpse** via the provider's API status (#27) instead of
     ssh-polling a container that never came up for the full deadline;
+  - **in-flight host-death retry** (#48): if a leg's command exits non-zero AND
+    the provider's `dead_reason` CONFIRMS the host died under it, the leg fails
+    over and re-runs on a fresh host (legs are idempotent). A non-zero exit on a
+    *live* host is a genuine work failure -- a terminal `RUN_FAIL`, not retried;
   - **refresh the offer pool** when it drains under heavy failover (#28);
-  - **resume**: a leg whose output already exists locally is skipped (#26);
+  - **resume**: a leg whose output already exists locally is skipped (#26), so a
+    whole-leg failure also recovers on relaunch;
   - **launch jitter** so N legs don't fire N simultaneous DNS lookups (#29);
   - **signal-safe teardown** (#24): a SIGTERM/SIGINT mid-run still destroys every
-    in-flight rental, a backstop to each `rent()`'s own leak-proof teardown.
+    in-flight rental, a backstop to each `rent()`'s own leak-proof teardown;
+  - **post-run reconciliation** (#48): `run()` sweeps any rental still tracked at
+    the end (a teardown gap) before returning.
+
+Recovery boundary, stated honestly: hosts are recovered at provisioning, between
+legs, and mid-leg WHEN `dead_reason` can confirm the death; a host that dies in a
+way `dead_reason` cannot detect surfaces as a `RUN_FAIL` recoverable by
+relaunch+resume, not by silent in-flight re-renting.
 
 Transient REST retry (#23) and the leak-proof teardown live in the Provider
 (`vast.py`), so they apply here for free.
@@ -46,6 +58,7 @@ from jax_solitons.campaign.protocols import (
     HostProbeFailed,
     HostSpec,
     LaunchSpec,
+    LeakRisk,
     Provider,
     RentedHost,
     RentUnavailable,
@@ -234,6 +247,12 @@ class FleetExecutor:
             return
         remote = (leg.fetch if leg.fetch.startswith("/")
                   else f"{self.remote_work_dir}/{leg.fetch}")
+        # Strip any trailing slash: `scp -r src/ dst` copies the CONTENTS into dst,
+        # but `scp -r src dst` lands it as `dst/<basename>` -- which is exactly
+        # where marker() (also rstrip'd) looks. Without this, a trailing-slash fetch
+        # deposits the files one level up from the marker and a *successful* leg
+        # reports NO_RESULT, needlessly re-running on relaunch (CM review #48).
+        remote = remote.rstrip("/")
         leg_dir = self._leg_dir(leg)
         leg_dir.mkdir(parents=True, exist_ok=True)
         _scp_down(self.key_path, host.ssh_host, host.ssh_port, remote, str(leg_dir))
@@ -267,6 +286,17 @@ class FleetExecutor:
                         # result correlates to the provider's live-instance list,
                         # `_track`, and `dead_reason`.
                         if rc != 0:
+                            # Distinguish "the work failed" from "the host died
+                            # under the work" (#48): if the provider confirms the
+                            # host is dead, this is a host failure -- fail over and
+                            # retry the leg on a fresh host (our legs are idempotent:
+                            # per-seed/model outputs, resume skips completed).
+                            # Otherwise the work genuinely failed -- a terminal
+                            # RUN_FAIL, don't re-run it on new hardware.
+                            dead = self._host_dead(host.id)
+                            if dead:
+                                raise HostProbeFailed(
+                                    f"host {host.id} died mid-run: {dead}")
                             return LegResult(leg.label, "RUN_FAIL", host.id,
                                              f"rc={rc}: {out[-240:]}")
                         self._fetch(host, leg)
@@ -282,10 +312,26 @@ class FleetExecutor:
             except Exception as e:                        # noqa: BLE001
                 # No host handle here (rent may have failed before yielding), so
                 # the offer id is the best correlation we have for a terminal error.
+                # A leak is flagged by TYPE (LeakRisk), not by whether the word
+                # "LEAK" survived into the message -- the substring is a defensive
+                # fallback only, so a reworded message can't hide a billing GPU.
                 msg = str(e)
-                status = "LEAK" if "LEAK" in msg.upper() else "ERROR"
-                return LegResult(leg.label, status, offer.id,
+                is_leak = isinstance(e, LeakRisk) or "LEAK" in msg.upper()
+                return LegResult(leg.label, "LEAK" if is_leak else "ERROR", offer.id,
                                  f"{type(e).__name__}: {msg[:200]}")
+
+    def _host_dead(self, host_id: str) -> str | None:
+        """The provider's `dead_reason` for `host_id` if it exposes one and the
+        host has visibly died, else None. Provider-agnostic: a provider without
+        `dead_reason` (or a transient read) yields None = 'not confirmed dead', so
+        a mid-run rc!=0 stays a work failure rather than a spurious failover."""
+        dr = getattr(self.provider, "dead_reason", None)
+        if dr is None:                                    # pragma: no cover
+            return None
+        try:
+            return dr(host_id)
+        except Exception:                                 # noqa: BLE001  # pragma: no cover
+            return None
 
     # -- live-rental registry (signal-safe teardown backstop, #24) -----------
     def _track(self, instance_id: str) -> None:
@@ -351,6 +397,15 @@ class FleetExecutor:
                         results[r.label] = r
                         self._log(f"LEG {r.label}: {r.status}"
                                   + (f" ({r.detail})" if r.detail else ""))
+        # Post-run reconciliation (#48): every tracked rental is untracked in its
+        # leg's finally, so a non-empty _live here means a teardown gap (a rental
+        # that escaped cleanup). Surface it loudly and sweep before it bills.
+        with self._live_lock:
+            stranded = list(self._live)
+        if stranded:
+            self._log(f"!! {len(stranded)} rental(s) STILL TRACKED after run "
+                      f"(teardown gap) -- destroying: {stranded}")
+            self._destroy_live()
         return [results[leg.label] for leg in legs]
 
     def _signal_guard(self):

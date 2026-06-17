@@ -319,6 +319,16 @@ class RentUnavailable(RuntimeError):
     provider-agnostic (no need to string-match a provider-specific error)."""
 
 
+class LeakRisk(RuntimeError):
+    """A rented host could NOT be confirmed torn down -- destroy failed or the
+    instance is still present after teardown -- so a GPU may still be billing.
+    The provider-agnostic, structured leak signal: a Provider's `rent()` raises
+    this (not a stringly-typed "LEAK" message) so a fleet/executor distinguishes a
+    cost-safety alarm from an ordinary error by *type*, and a missed leak can't
+    hide behind a reworded message. Unlike `RentUnavailable`/`HostProbeFailed`
+    this is NOT a failover signal -- it must surface loudly, not be retried."""
+
+
 @runtime_checkable
 class Provider(Protocol):
     """A pluggable cloud broker: list offers, rent one, ALWAYS tear it down (F).
