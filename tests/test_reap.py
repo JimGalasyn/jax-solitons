@@ -368,3 +368,91 @@ def test_main_unscoped_destroy_refused(monkeypatch, capsys):
     rc = main(["--yes"])
     assert rc == 2 and p.destroyed == []
     assert "REFUSING unscoped destroy" in capsys.readouterr().out
+
+
+# -- structured classification + honest accounting (CM review #48) ------------
+class _Coded(RuntimeError):
+    """A provider error carrying a structured HTTP `.code` (like VastError)."""
+    def __init__(self, code, msg="api error"):
+        super().__init__(msg); self.code = code
+
+
+def test_classify_prefers_structured_code_over_substring():
+    from jax_solitons.campaign.reap import _classify
+    assert _classify(_Coded(404)) == "gone"
+    assert _classify(_Coded(410)) == "gone"
+    assert _classify(_Coded(403)) == "auth"
+    assert _classify(_Coded(500)) == "transient"
+    # the crux: a "404" buried in a 500's message must NOT read as gone -- the
+    # structured code wins, so a still-billing box is never called torn-down.
+    assert _classify(_Coded(500, "req-404-deadbeef upstream timeout")) == "transient"
+
+
+def test_classify_substring_fallback_when_no_code():
+    from jax_solitons.campaign.reap import _classify
+    assert _classify(RuntimeError("DELETE .../ -> HTTP 404: not found")) == "gone"
+    assert _classify(RuntimeError("HTTP 403: forbidden")) == "auth"
+    assert _classify(OSError("connection reset")) == "transient"
+
+
+def test_classify_bug_type_is_terminal():
+    from jax_solitons.campaign.reap import _classify
+    assert _classify(TypeError("malformed record")) == "bug"
+    assert _classify(KeyError("id")) == "bug"
+
+
+def test_reap_bug_in_destroy_fails_fast_no_retry():
+    """A TypeError (a real adapter bug) must NOT be retried as transient and then
+    reported as a clean re-runnable 'failed' -- it won't self-heal (CM #48)."""
+    from jax_solitons.campaign.reap import reap
+    p = _FakeProvider([10], errors={10: [TypeError("malformed record")] * 9})
+    rep = reap(p, dry_run=False, retries=4)
+    assert rep["failed"] == [10] and p.attempts.count(10) == 1   # one shot, no backoff
+
+
+def test_reap_dph_reclaimed_counts_only_cleared(monkeypatch):
+    """A FAILED destroy leaves the box billing, so its dph must not inflate the
+    reclaimed headline -- the number must be honest in the partial-failure run."""
+    from jax_solitons.campaign import reap as reapmod
+    from jax_solitons.campaign.reap import reap
+    monkeypatch.setattr(reapmod.time, "sleep", lambda *_: None)
+    p = _FakeProvider([10, 11], errors={11: [OSError("conn reset")] * 99})  # 11 fails
+    rep = reap(p, dry_run=False, retries=2)
+    assert rep["destroyed"] == [10] and rep["failed"] == [11]
+    assert abs(rep["dph_reclaimed"] - 0.1) < 1e-9        # only 10's 0.1, not 0.2
+
+
+def test_reap_dry_run_dph_is_potential():
+    """Dry run reports the TARGETED dph (potential savings), nothing destroyed."""
+    from jax_solitons.campaign.reap import reap
+    rep = reap(_FakeProvider([10, 11]), dry_run=True)
+    assert abs(rep["dph_reclaimed"] - 0.2) < 1e-9 and rep["destroyed"] == []
+
+
+def test_parse_duration_rejects_nan():
+    """'nan' parses to NaN, which `not secs > 0` catches -- lock it (CM #48)."""
+    import pytest
+    from jax_solitons.campaign.reap import _parse_duration
+    with pytest.raises(ValueError):
+        _parse_duration("nan")
+
+
+def test_reap_relists_on_destructive_label_scope():
+    """A real --label/--older-than destroy re-fetches live state so it can't act on
+    a stale snapshot (a box recycled into the same label in the gap) -- TOCTOU #48."""
+    from jax_solitons.campaign.reap import reap
+    p = _FakeProvider([10, 11], labels={10: "f", 11: "f"})
+    live = p.list_instances()                            # caller's snapshot
+    assert p.list_calls == 1
+    reap(p, label="f", dry_run=False, live=live)
+    assert p.list_calls == 2                             # re-listed inside reap
+
+
+def test_reap_no_relist_for_dry_run_or_unscoped():
+    """Dry run and the (snapshot-safe) all-account scope reuse the passed listing."""
+    from jax_solitons.campaign.reap import reap
+    p = _FakeProvider([10], labels={10: "f"})
+    live = p.list_instances()
+    reap(p, label="f", dry_run=True, live=live)          # dry run -> no re-list
+    reap(p, dry_run=False, live=live)                    # all-account -> no re-list
+    assert p.list_calls == 1

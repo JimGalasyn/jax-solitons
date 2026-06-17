@@ -93,7 +93,7 @@ class ProviderExecutor:
                  remote_work_dir: str = "/workspace/runs",
                  local_work_dir: str = "campaign_out",
                  ready_timeout: float = 900, run_timeout: float = 3600,
-                 rent_timeout: float = 600):
+                 rent_timeout: float = 600, max_attempts: int = 12):
         self.provider = provider
         # Distinct per backing provider so a multi-provider harvest can tell
         # Vast from RunPod (both are ProviderExecutors): "provider:vast" etc.
@@ -108,6 +108,9 @@ class ProviderExecutor:
         self.ready_timeout = ready_timeout
         self.run_timeout = run_timeout
         self.rent_timeout = rent_timeout
+        # Cap the failover walk: trying 200 marginal offers at ready_timeout each
+        # is a multi-day grind before giving up; bound it to the best N (#48).
+        self.max_attempts = max_attempts
 
     # -- per-host steps ------------------------------------------------------
     def _wait_engine_ready(self, host: RentedHost) -> None:
@@ -164,6 +167,12 @@ class ProviderExecutor:
         """Rent a host (failing over bad ones), run every config on it, sync the
         artifacts back, and tear down. Returns the per-config result records.
 
+        Failover covers provisioning AND mid-run: a config error on a host that
+        `dead_reason` confirms is dead re-rents a fresh host and re-runs (the
+        worker's resume skips checkpointed work), rather than absorbing the death
+        as per-config errors. The failover walk is capped at `max_attempts` offers
+        so a marketplace of marginal hosts can't grind for days (#48).
+
         Teardown is the Provider's leak-proof `rent()` invariant -- it fires on
         every exit, including the failover `continue` and any exception here.
 
@@ -184,18 +193,44 @@ class ProviderExecutor:
         if not offers:
             raise RuntimeError(
                 f"{self.provider.name}: no offers match {self.host_spec}")
+        attempts = offers[:self.max_attempts]            # bound the failover walk (#48)
         last_err: Exception | None = None
-        for offer in offers:
+        for offer in attempts:
             try:
                 with self.provider.rent(offer, self.launch,
                                         timeout_s=self.rent_timeout) as host:
                     self._wait_engine_ready(host)        # may raise -> failover
-                    results = [self._run_config(host, c) for c in configs]
+                    results = []
+                    for c in configs:
+                        rec = self._run_config(host, c)
+                        # If a config errors AND the provider confirms the host is
+                        # dead, this is a HOST failure, not a config failure: fail
+                        # over to a fresh host instead of hammering a corpse for a
+                        # full run_timeout on every remaining config (#48). The
+                        # worker's own resume skips work already checkpointed.
+                        if rec.get("error") and self._host_dead(host.id):
+                            raise HostProbeFailed(
+                                f"host {host.id} died mid-run on "
+                                f"{c.run_name()}: {str(rec['error'])[:120]}")
+                        results.append(rec)
                     self._sync_back(host)
                     return results
             except (HostProbeFailed, TimeoutError, RentUnavailable) as e:
                 last_err = e                              # bad host/race -> next offer
                 continue
         raise RuntimeError(
-            f"{self.provider.name}: all {len(offers)} offers failed to run; "
-            f"last error: {last_err}")
+            f"{self.provider.name}: all {len(attempts)} offer attempt(s) failed to "
+            f"run (of {len(offers)} matched); last error: {last_err}")
+
+    def _host_dead(self, host_id: str) -> str | None:
+        """The provider's `dead_reason` for `host_id` if it exposes one and the
+        host has visibly died, else None (provider-agnostic: no dead_reason or a
+        transient read -> None = not-confirmed-dead, so a config error stays a
+        config failure, not a spurious failover)."""
+        dr = getattr(self.provider, "dead_reason", None)
+        if dr is None:                                    # pragma: no cover
+            return None
+        try:
+            return dr(host_id)
+        except Exception:                                 # noqa: BLE001  # pragma: no cover
+            return None

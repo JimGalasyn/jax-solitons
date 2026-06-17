@@ -39,6 +39,7 @@ from jax_solitons.campaign.protocols import (
     HostProbeFailed,
     HostSpec,
     LaunchSpec,
+    LeakRisk,
     Offer,
     RentedHost,
     RentUnavailable,
@@ -364,7 +365,13 @@ class VastProvider:
         over on). Lets a readiness loop fast-fail a corpse (a container that never
         came up) in seconds instead of ssh-polling it for the full deadline (#27).
         Keeps the bad-host string matching here in the adapter so an executor's
-        fast-fail stays provider-agnostic (it just asks `dead_reason`)."""
+        fast-fail stays provider-agnostic (it just asks `dead_reason`).
+
+        Honest limit: the seconds-not-deadline speedup only holds for an
+        ENUMERATED failure (a status flip, or a `_BAD_HOST_SIGNS` match). A host
+        that dies for a reason not in that list returns None here and still costs
+        the readiness loop its full timeout -- the list is a fast path, not total
+        coverage."""
         try:
             inst = self.status(int(instance_id))
         except Exception:
@@ -450,8 +457,19 @@ class VastProvider:
                     self.destroy(instance_id)
                     destroyed = True
                     break
+                except VastError as e:
+                    # 404/410 == already gone == the DESIRED state, not a failure:
+                    # `destroy` -> `_req` raises VastError on a terminal HTTP error,
+                    # and a blind catch-all would retry four more times against a
+                    # nonexistent instance and then raise a spurious LEAK RISK even
+                    # though the box is correctly gone. Classify on `.code`, the way
+                    # reap._classify does (CM review #48).
+                    if e.code in (404, 410):
+                        destroyed = True
+                        break
+                    time.sleep(2)                       # other API error: retry
                 except Exception:
-                    time.sleep(2)
+                    time.sleep(2)                       # transient transport: retry
             # Independently verify teardown, distinguishing gone / present /
             # unverifiable so a failed destroy or a failed verify can never
             # silently pass as success.
@@ -466,14 +484,19 @@ class VastProvider:
                       billed_s=round(billed_s, 1),
                       est_cost_usd=round(offer.dph * billed_s / 3600, 4),
                       destroyed=destroyed, verify=verify)
-            # Raise LOUDLY on a confirmed leak or a failed destroy. (An
-            # unverifiable check after a successful destroy is logged, not
-            # raised -- destroy reported success and the receipt records it.)
+            # Raise LOUDLY on a confirmed leak or a failed destroy, as a structured
+            # `LeakRisk` so a fleet flags it by TYPE, not by a "LEAK" substring.
             if not destroyed or verify == "present":
-                raise VastError(
+                raise LeakRisk(
                     f"LEAK RISK: instance {instance_id} not confirmed torn down "
                     f"(destroyed={destroyed}, verify={verify}) -- "
                     f"run `vastai destroy instance {instance_id}`")
+            # destroy reported success but we couldn't double-check (list failed):
+            # logged above, but warn louder -- a silent destroy-lie + blind verify
+            # is the one narrow window that would otherwise read as a clean exit.
+            if verify.startswith("unverified"):              # pragma: no cover
+                print(f"  ~ instance {instance_id}: destroyed but teardown "
+                      f"UNVERIFIED ({verify[:80]}) -- confirm it is gone.")
 
 
 # Back-compat import alias: the class was `VastClient` before it implemented the

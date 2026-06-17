@@ -49,9 +49,17 @@ from pathlib import Path
 _AGE_FIELDS = ("start_date", "created_at", "start_time")
 _DUR_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
-# substrings that classify a destroy error (VastError msg carries "HTTP <code>")
+# substrings that classify a destroy error -- the FALLBACK only, used when the
+# exception carries no structured status code (a provider error keys off its
+# numeric `.code`, e.g. VastError.code = HTTP status; CM review #48).
 _GONE = ("404", "410", "not found", "notfound", "no_such", "does not exist")
 _AUTH = ("401", "403", "forbidden", "unauthor")
+
+# Python programming errors: a destroy that raises one of these has a BUG in the
+# adapter (a malformed record, a bad attr), not a network blip. Retrying just
+# burns backoff and then reports a clean "failed" you'd needlessly re-run, masking
+# the real fault -- so classify them as terminal and surface them (CM review #48).
+_BUG_TYPES = (TypeError, KeyError, AttributeError, IndexError, NameError, ValueError)
 
 
 def leaked_ids(ledger_path: str | Path) -> set[str]:
@@ -140,7 +148,23 @@ def _parse_duration(s: str) -> float:
 
 
 def _classify(exc: Exception) -> str:
-    """transient (retry) | gone (already destroyed -> success) | auth (terminal)."""
+    """transient (retry) | gone (already destroyed -> success) | auth (terminal) |
+    bug (programming error -> terminal, surfaced).
+
+    Prefers a STRUCTURED status code -- a provider error carries `.code` (VastError
+    = HTTP status) -- over matching substrings in the stringified exception, where a
+    bare ``404`` could appear in an instance id, a timestamp, or a request id and
+    misclassify a live (still-billing) box as gone. Substrings are the fallback for
+    errors with no code (CM review #48)."""
+    code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        if code in (404, 410):
+            return "gone"
+        if code in (401, 403):
+            return "auth"
+        return "transient"                              # 5xx / 408 / 429 / other
+    if isinstance(exc, _BUG_TYPES):
+        return "bug"                                    # a real fault, won't self-heal
     s = str(exc).lower()
     if any(t in s for t in _GONE):
         return "gone"
@@ -165,6 +189,10 @@ def _destroy_with_retry(provider, iid, retries: int = 4) -> str:
                 print(f"  ! instance {iid}: destroy refused (auth/permission): "
                       f"{str(e)[:120]}")
                 return "failed"                     # terminal -- don't burn backoff
+            if kind == "bug":
+                print(f"  ! instance {iid}: destroy hit a likely BUG, not retrying: "
+                      f"{type(e).__name__}: {str(e)[:120]}")
+                return "failed"                     # terminal -- a retry won't fix code
             if attempt == retries - 1:
                 print(f"  ! instance {iid}: destroy FAILED after {retries} tries: "
                       f"{type(e).__name__}: {str(e)[:120]}")
@@ -194,6 +222,15 @@ def reap(provider, *, ledger: str | Path | None = None,
     """
     if live is None:
         live = provider.list_instances()
+    # TOCTOU: --label / --older-than target the CURRENT live set, but `live` may be
+    # a snapshot main() fetched before printing every instance + running two safety
+    # gates -- a box can finish and a new one be rented into the same label in that
+    # gap. For a real destroy on those age/label scopes, re-fetch so we can't target
+    # a box that was recycled. (--ledger is self-protecting: a recycled box gets a
+    # NEW id absent from this ledger's leaked set, so its snapshot needs no refresh;
+    # --all targets everything regardless, so staleness can't mis-target it.)
+    if not dry_run and ledger is None and (label is not None or older_than is not None):
+        live = provider.list_instances()
     targets = list(live)
     if ledger is not None:
         leaked = leaked_ids(ledger)
@@ -207,15 +244,22 @@ def reap(provider, *, ledger: str | Path | None = None,
             if age is not None and age >= older_than:     # unknown age -> dropped
                 kept.append(i)
         targets = kept
-    dph = sum(float(getattr(i, "dph", 0) or 0) for i in targets)
+    dph_targeted = sum(float(getattr(i, "dph", 0) or 0) for i in targets)
 
     report = dict(live=len(live), targeted=len(targets), destroyed=[], gone=[],
-                  failed=[], dph_reclaimed=dph, dry_run=dry_run)
+                  failed=[], dph_reclaimed=dph_targeted, dry_run=dry_run)
     if dry_run or not targets:
-        return report
+        return report                               # dry-run: dph_reclaimed = potential
+    # actual reclaim sums ONLY confirmed-cleared boxes: a destroy that FAILED leaves
+    # the box billing, so counting its dph would overstate savings exactly in the
+    # partial-failure run where the number most needs to be honest (CM review #48).
+    reclaimed = 0.0
     for i in targets:
         status = _destroy_with_retry(provider, i.id, retries=retries)
         report[status].append(i.id)                # native id (int vast / str runpod)
+        if status in ("destroyed", "gone"):
+            reclaimed += float(getattr(i, "dph", 0) or 0)
+    report["dph_reclaimed"] = reclaimed
     return report
 
 

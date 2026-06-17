@@ -410,3 +410,66 @@ def test_status_format_variants():
     s2 = _format({"live": [{"id": 5, "status": "running", "dph": 0.2}],
                   "live_dph": 0.2})
     assert "0.200/hr" in s2
+
+
+# -- in-flight host-death + scp/marker + post-run sweep (CM review #48) --------
+def test_inflight_retry_on_confirmed_host_death(patched, tmp_path, monkeypatch):
+    """A leg whose command exits non-zero on a host that `dead_reason` CONFIRMS is
+    dead fails over and re-runs on a fresh host -- not a terminal RUN_FAIL."""
+    leg_calls = {"n": 0}
+
+    def stateful_ssh(key, host, port, cmd, timeout=120):
+        if "import jax_solitons" in cmd:
+            return (0, "")
+        if "worker-ready" in cmd:
+            return (0, "/tmp/worker-ready")
+        leg_calls["n"] += 1                       # the leg command
+        return (1, "host dying") if leg_calls["n"] == 1 else (0, "done")
+
+    monkeypatch.setattr(fleet, "_ssh", stateful_ssh)
+    prov = FakeProvider([_offer("dead"), _offer("ok")], dead_ids={"dead"})
+    [r] = _exec(prov, tmp_path).run([_leg("L1")])
+    assert r.status == "OK"                        # recovered on the fresh host
+    assert prov.rented == ["dead", "ok"] and prov.live == {}   # failed over, both gone
+
+
+def test_live_host_nonzero_is_terminal_run_fail(patched, tmp_path):
+    """A non-zero exit on a host `dead_reason` says is ALIVE is a genuine work
+    failure -- terminal RUN_FAIL, NOT a failover (don't re-run real failures)."""
+    patched(ready=True, run_rc=1, run_out="boom")
+    prov = FakeProvider([_offer("a"), _offer("b")])   # neither is dead
+    [r] = _exec(prov, tmp_path).run([_leg("L1")])
+    assert r.status == "RUN_FAIL" and prov.rented == ["a"]   # no failover to b
+
+
+def test_fetch_strips_trailing_slash_to_match_marker(patched, tmp_path, monkeypatch):
+    """A trailing-slash fetch must still land where marker() looks: the remote is
+    rstrip'd so scp deposits leg_dir/<basename> == marker (else a successful leg
+    wrongly reports NO_RESULT and re-runs)."""
+    import os
+    captured = {}
+
+    def cap_scp_down(key, host, port, remote, dst):
+        captured["remote"] = remote               # scp -r remote dst -> dst/<basename>
+        os.makedirs(os.path.join(dst, os.path.basename(remote)), exist_ok=True)
+        return (0, "")
+
+    monkeypatch.setattr(fleet, "_scp_down", cap_scp_down)
+    patched(ready=True)
+    prov = FakeProvider([_offer("a")])
+    leg = _leg("L1", fetch="out_kick/")            # trailing slash
+    [r] = _exec(prov, tmp_path).run([leg])
+    assert not captured["remote"].endswith("/")    # rstrip'd before scp
+    assert os.path.basename(captured["remote"]) == leg.marker() == "out_kick"
+    assert r.status == "OK"                         # marker found where scp landed
+
+
+def test_post_run_sweep_destroys_stranded_rental(patched, tmp_path, monkeypatch):
+    """If a rental escapes its leg's _untrack (a teardown gap), run()'s post-run
+    reconciliation destroys it before it bills."""
+    patched(ready=True)
+    prov = FakeProvider([_offer("a")])
+    ex = _exec(prov, tmp_path)
+    monkeypatch.setattr(ex, "_untrack", lambda iid: None)   # simulate the tracking gap
+    ex.run([_leg("L1")])
+    assert "1000" in prov.destroyed                # swept by the post-run _destroy_live
