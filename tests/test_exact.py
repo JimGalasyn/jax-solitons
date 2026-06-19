@@ -17,7 +17,10 @@ from jax_solitons.models.faddeev import CP1Constraint, S2Constraint
 from jax_solitons.seeds import rational_map_hopfion
 from jax_solitons.topology import area_form_plaquette, hopf_charge
 
-GRID = BoxGrid(N=24, L=8.0)
+# float64: these are EXACT identities, only meaningful at full precision (see
+# conftest's x64 enable). In float32 a generic O(3) rotation rounds to ~4e-4 and
+# trips the tight tolerances below; in float64 the deviation is ~1e-12.
+GRID = BoxGrid(N=24, L=8.0, dtype=jnp.float64)
 
 
 def _random_smooth_n(grid: BoxGrid, seed: int, corr=1.0):
