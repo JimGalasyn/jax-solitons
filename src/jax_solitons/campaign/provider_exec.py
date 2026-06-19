@@ -21,6 +21,7 @@ import json
 import os
 import shlex
 import subprocess
+import threading
 import time
 from collections.abc import Iterable
 
@@ -56,6 +57,45 @@ def _ssh(key: str, host: str, port: int, cmd: str, timeout: float = 120):  # pra
         return r.returncode, r.stdout + r.stderr
     except subprocess.TimeoutExpired as e:
         return 124, f"ssh timeout after {timeout}s: {e}"
+
+
+def _ssh_stream(key: str, host: str, port: int, cmd: str, timeout: float,
+                progress_path: str):  # pragma: no cover  (live subprocess)
+    """Like `_ssh`, but tee the box's stdout+stderr to `progress_path` line by
+    line AS IT ARRIVES, so a multi-hour leg is observable live (`tail -f` the
+    file on the control plane) instead of going dark until the command exits.
+
+    Same return contract as `_ssh` -- `(rc, combined-output)`, with a timeout
+    surfaced as `(124, ...)` so the caller's normal rc!=0 handling applies. A
+    background reader thread pumps the pipe (so `proc.wait(timeout=...)` keeps
+    clean timeout semantics regardless of whether the box is emitting output).
+    Live subprocess to a rented host; tests monkeypatch this."""
+    args = ["ssh", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=15", "-p", str(port), f"root@{host}", cmd]
+    buf: list[str] = []
+    try:
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+    except OSError as e:
+        return 1, f"ssh stream spawn error: {e}"
+
+    def _pump(stream, sink):
+        for line in stream:
+            buf.append(line)
+            sink.write(line)
+
+    with open(progress_path, "a", buffering=1) as pf:
+        reader = threading.Thread(target=_pump, args=(proc.stdout, pf), daemon=True)
+        reader.start()
+        try:
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            reader.join(timeout=5)
+            return 124, "".join(buf) + f"\nssh stream timeout after {timeout}s"
+        reader.join(timeout=10)
+    return rc, "".join(buf)
 
 
 def _scp_down(key: str, host: str, port: int, remote: str, local: str,

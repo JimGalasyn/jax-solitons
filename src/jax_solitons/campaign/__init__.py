@@ -54,6 +54,7 @@ from jax_solitons.campaign.fleet import (
     ImportReady,
     LegResult,
     SentinelReady,
+    parse_progress_line,
 )
 from jax_solitons.campaign.status import fleet_status
 from jax_solitons.campaign.remote import load_run_fn, run_one
@@ -85,6 +86,7 @@ __all__ = [
     "VastProvider", "VastLedger", "RunPodProvider",
     # parallel script-fleet executor (#25) + live status
     "FleetExecutor", "FleetLeg", "LegResult", "ImportReady", "SentinelReady",
+    "parse_progress_line",
     "fleet_status",
     # shared object-store backend (A/B/C over a BlobStore)
     "BlobStore", "MemoryBlobStore", "S3BlobStore",

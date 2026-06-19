@@ -473,3 +473,57 @@ def test_post_run_sweep_destroys_stranded_rental(patched, tmp_path, monkeypatch)
     monkeypatch.setattr(ex, "_untrack", lambda iid: None)   # simulate the tracking gap
     ex.run([_leg("L1")])
     assert "1000" in prov.destroyed                # swept by the post-run _destroy_live
+
+
+# -- observability: progress streaming + parsing -----------------------------
+
+@pytest.mark.parametrize("line,expected", [
+    ("[[progress phase=kick frac=0.40 t=12s]]",
+     {"phase": "kick", "frac": "0.40", "t": "12s"}),
+    ("noise before [[progress phase=relax]] and after", {"phase": "relax"}),
+    ("a plain log line, no marker", None),
+    ("[[progress]]", {}),                                   # marker, no fields
+    ("[[progress phase=kick frac=0.5", None),               # unterminated -> ignored
+])
+def test_parse_progress_line(line, expected):
+    assert fleet.parse_progress_line(line) == expected
+
+
+def _fake_ssh_stream_factory(lines, *, rc=0):
+    """Emulate `_ssh_stream`: tee `lines` to progress_path, return (rc, joined)."""
+    def fake(key, host, port, cmd, timeout, progress_path):
+        with open(progress_path, "a") as f:
+            for ln in lines:
+                f.write(ln if ln.endswith("\n") else ln + "\n")
+        return rc, "".join(ln + "\n" for ln in lines)
+    return fake
+
+
+def test_stream_progress_tees_log_and_progress_returns_last_marker(
+        patched, monkeypatch, tmp_path):
+    patched(ready=True)
+    lines = ["booting", "[[progress phase=relax frac=0.0]]",
+             "[[progress phase=kick frac=0.5 t=99s]]", "wrote manifest"]
+    monkeypatch.setattr(fleet, "_ssh_stream", _fake_ssh_stream_factory(lines))
+    leg = FleetLeg(label="L1", command="run.sh", ship=("driver.py",),
+                   stream_progress=True)
+    ex = _exec(FakeProvider([_offer("a")]), tmp_path)
+    [r] = ex.run([leg])
+    assert r.status == "OK"
+    plog = tmp_path / "L1" / fleet.PROGRESS_LOG
+    assert plog.exists() and "phase=kick" in plog.read_text()   # tee'd live
+    # accessor returns the LAST structured marker, skipping the trailing free text
+    assert ex.progress(leg) == {"phase": "kick", "frac": "0.5", "t": "99s"}
+
+
+def test_non_streaming_leg_never_calls_ssh_stream(patched, monkeypatch, tmp_path):
+    """Default legs are unchanged: plain `_ssh`, no progress.log, progress()=None."""
+    patched(ready=True)
+    monkeypatch.setattr(fleet, "_ssh_stream", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("_ssh_stream called for a non-streaming leg")))
+    leg = _leg("L1")
+    ex = _exec(FakeProvider([_offer("a")]), tmp_path)
+    [r] = ex.run([leg])
+    assert r.status == "OK"
+    assert ex.progress(leg) is None
+    assert not (tmp_path / "L1" / fleet.PROGRESS_LOG).exists()

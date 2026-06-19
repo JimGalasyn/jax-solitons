@@ -68,6 +68,7 @@ from jax_solitons.campaign.provider_exec import (
     _scp_down,
     _scp_up,
     _ssh,
+    _ssh_stream,
 )
 
 
@@ -85,6 +86,11 @@ class FleetLeg:
                to the basename of `fetch`; a more precise marker (e.g.
                ``"out_kick/manifest.json"``) makes resume robust to a partial
                fetch.
+      stream_progress  tee the box's stdout to `<local_out_dir>/<label>/
+               progress.log` line by line as it arrives, so a multi-hour leg is
+               observable live (`tail -f`) instead of going dark until exit. Off
+               by default (atomic legs are byte-for-byte unchanged); opt in for
+               long single-command legs. See `FleetExecutor.progress`.
     """
 
     label: str
@@ -92,11 +98,42 @@ class FleetLeg:
     ship: tuple[str, ...] = ()
     fetch: str = ""
     done_when: str = ""
+    stream_progress: bool = False
 
     def marker(self) -> str:
         """The local relative path that signals this leg is complete."""
         return self.done_when or (os.path.basename(self.fetch.rstrip("/"))
                                   if self.fetch else "")
+
+
+#: Filename of the live stdout tee under a leg's local dir (when stream_progress).
+PROGRESS_LOG = "progress.log"
+
+
+def parse_progress_line(line: str) -> dict[str, str] | None:
+    """Parse one structured progress marker, or None if the line isn't one.
+
+    The convention a driver emits to advertise where it is, e.g.::
+
+        [[progress phase=kick frac=0.40 t=1234s]]
+
+    Free-form text (the driver's normal logging) is ignored -- only lines
+    containing a ``[[progress ...]]`` token are parsed, into a flat str->str
+    dict of the ``key=value`` pairs. Physics-agnostic: keys are whatever the
+    driver chose (`phase`, `frac`, `seed`, ...)."""
+    i = line.find("[[progress")
+    if i < 0:
+        return None
+    j = line.find("]]", i)
+    if j < 0:
+        return None
+    body = line[i + len("[[progress"):j]
+    out: dict[str, str] = {}
+    for tok in body.split():
+        k, _, v = tok.partition("=")
+        if k:
+            out[k] = v
+    return out
 
 
 @dataclasses.dataclass(frozen=True)
@@ -209,6 +246,26 @@ class FleetExecutor:
     def _leg_dir(self, leg: FleetLeg) -> Path:
         return self.local_out_dir / leg.label
 
+    # -- observability -------------------------------------------------------
+    def progress(self, leg: FleetLeg) -> dict[str, str] | None:
+        """Latest parsed `[[progress ...]]` marker for a streaming leg, or None.
+
+        Reads the live tee at `<leg_dir>/progress.log` and returns the last
+        structured marker the driver emitted (see `parse_progress_line`); None
+        if the leg isn't streaming, hasn't started, or has emitted no marker
+        yet. A cheap point-in-time poll for a watcher/heartbeat -- it does not
+        block or tail."""
+        path = self._leg_dir(leg) / PROGRESS_LOG
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            return None
+        for line in reversed(lines):
+            parsed = parse_progress_line(line)
+            if parsed is not None:
+                return parsed
+        return None
+
     def _complete(self, leg: FleetLeg) -> bool:
         """True if this leg's output already exists locally -- skip it on a
         relaunch. With no marker we cannot tell, so it is never pre-skipped."""
@@ -280,8 +337,16 @@ class FleetExecutor:
                         self._wait_ready(host)
                         self._ship(host, leg)
                         cmd = f"cd {shlex.quote(self.remote_work_dir)} && {leg.command}"
-                        rc, out = _ssh(self.key_path, host.ssh_host, host.ssh_port,
-                                       cmd, timeout=self.run_timeout)
+                        if leg.stream_progress:
+                            leg_dir = self._leg_dir(leg)
+                            leg_dir.mkdir(parents=True, exist_ok=True)
+                            rc, out = _ssh_stream(
+                                self.key_path, host.ssh_host, host.ssh_port, cmd,
+                                self.run_timeout, str(leg_dir / PROGRESS_LOG))
+                        else:
+                            rc, out = _ssh(self.key_path, host.ssh_host,
+                                           host.ssh_port, cmd,
+                                           timeout=self.run_timeout)
                         # host.id is the rented INSTANCE id (not offer.id), so a
                         # result correlates to the provider's live-instance list,
                         # `_track`, and `dead_reason`.
