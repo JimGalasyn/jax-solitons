@@ -91,6 +91,13 @@ class FleetLeg:
                observable live (`tail -f`) instead of going dark until exit. Off
                by default (atomic legs are byte-for-byte unchanged); opt in for
                long single-command legs. See `FleetExecutor.progress`.
+      resumable  treat the leg as resumable, not atomic: pull `fetch` off-box on
+               a cadence MID-RUN (not only at done), so partial results survive a
+               host that dies after an hour; and on a retry, push the accumulated
+               local partial back UP to the replacement box first, so the box's
+               own skip-if-exists continues instead of recomputing. Off by
+               default (atomic legs unchanged). Requires a driver that does
+               skip-if-exists + atomic writes for the partial to be trustworthy.
     """
 
     label: str
@@ -99,6 +106,7 @@ class FleetLeg:
     fetch: str = ""
     done_when: str = ""
     stream_progress: bool = False
+    resumable: bool = False
 
     def marker(self) -> str:
         """The local relative path that signals this leg is complete."""
@@ -220,6 +228,7 @@ class FleetExecutor:
                  max_parallel: int = 12, rent_timeout: float = 600,
                  ready_timeout: float = 1200, ready_poll_s: float = 15,
                  run_timeout: float = 9000, jitter_s: float = 2.0,
+                 fetch_interval_s: float = 120,
                  max_refills: int = 3, ledger=None, log=print):
         self.provider = provider
         self.launch = launch
@@ -234,6 +243,10 @@ class FleetExecutor:
         self.ready_poll_s = ready_poll_s
         self.run_timeout = run_timeout
         self.jitter_s = jitter_s
+        # Cadence (s) at which a `resumable` leg's fetch dir is pulled off-box
+        # MID-RUN, so partial results (relaxed checkpoint, completed sub-legs)
+        # survive a host that dies after an hour. Restored to the replacement box.
+        self.fetch_interval_s = fetch_interval_s
         self.max_refills = max_refills
         self.ledger = ledger
         self._log = log
@@ -314,6 +327,37 @@ class FleetExecutor:
         leg_dir.mkdir(parents=True, exist_ok=True)
         _scp_down(self.key_path, host.ssh_host, host.ssh_port, remote, str(leg_dir))
 
+    # -- resume transport (resumable legs) -----------------------------------
+    def _restore(self, host: RentedHost, leg: FleetLeg) -> None:
+        """Push any locally-accumulated partial `fetch` dir back UP to the box,
+        so the driver's own skip-if-exists resumes from it instead of recomputing
+        (resume on a *replacement* host). No-op if nothing was fetched yet."""
+        if not leg.fetch:
+            return
+        local = self._leg_dir(leg) / os.path.basename(leg.fetch.rstrip("/"))
+        if not local.exists():
+            return
+        # `fetch` is relative to remote_work_dir (or absolute). Land the dir back
+        # at the SAME remote path: scp -r <local> <remote_parent>/ -> parent/<base>.
+        remote = (leg.fetch if leg.fetch.startswith("/")
+                  else f"{self.remote_work_dir}/{leg.fetch}").rstrip("/")
+        remote_parent = os.path.dirname(remote)
+        _scp_up(self.key_path, host.ssh_host, host.ssh_port,
+                str(local), remote_parent + "/")
+
+    def _fetch_loop(self, host: RentedHost, leg: FleetLeg,
+                    stop: threading.Event) -> None:
+        """Pull `fetch` off-box every `fetch_interval_s` until `stop`, so partial
+        results accumulate locally even if the host dies mid-run. Best-effort: a
+        failed pull (e.g. the dir doesn't exist yet) is swallowed -- the final
+        `_fetch` and the leak-reaper are the backstops. The box writes atomically,
+        so an in-flight pull never grabs a half-written file."""
+        while not stop.wait(self.fetch_interval_s):
+            try:
+                self._fetch(host, leg)
+            except Exception:                             # noqa: BLE001 best-effort
+                pass
+
     # -- one leg, with failover ---------------------------------------------
     def _run_leg(self, pool: _OfferPool, leg: FleetLeg, idx: int) -> LegResult:
         # Launch jitter (#29): stagger starts within a parallel wave so we don't
@@ -336,17 +380,31 @@ class FleetExecutor:
                     try:
                         self._wait_ready(host)
                         self._ship(host, leg)
+                        if leg.resumable:
+                            self._restore(host, leg)   # push prior partial up
                         cmd = f"cd {shlex.quote(self.remote_work_dir)} && {leg.command}"
-                        if leg.stream_progress:
-                            leg_dir = self._leg_dir(leg)
-                            leg_dir.mkdir(parents=True, exist_ok=True)
-                            rc, out = _ssh_stream(
-                                self.key_path, host.ssh_host, host.ssh_port, cmd,
-                                self.run_timeout, str(leg_dir / PROGRESS_LOG))
-                        else:
-                            rc, out = _ssh(self.key_path, host.ssh_host,
-                                           host.ssh_port, cmd,
-                                           timeout=self.run_timeout)
+                        fetch_stop = threading.Event()
+                        fetcher = None
+                        if leg.resumable:
+                            fetcher = threading.Thread(
+                                target=self._fetch_loop,
+                                args=(host, leg, fetch_stop), daemon=True)
+                            fetcher.start()
+                        try:
+                            if leg.stream_progress:
+                                leg_dir = self._leg_dir(leg)
+                                leg_dir.mkdir(parents=True, exist_ok=True)
+                                rc, out = _ssh_stream(
+                                    self.key_path, host.ssh_host, host.ssh_port, cmd,
+                                    self.run_timeout, str(leg_dir / PROGRESS_LOG))
+                            else:
+                                rc, out = _ssh(self.key_path, host.ssh_host,
+                                               host.ssh_port, cmd,
+                                               timeout=self.run_timeout)
+                        finally:
+                            if fetcher is not None:
+                                fetch_stop.set()
+                                fetcher.join(timeout=30)
                         # host.id is the rented INSTANCE id (not offer.id), so a
                         # result correlates to the provider's live-instance list,
                         # `_track`, and `dead_reason`.
