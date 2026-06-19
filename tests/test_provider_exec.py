@@ -199,3 +199,45 @@ def test_mid_run_failover_on_confirmed_host_death(patched, monkeypatch):
     assert prov.rented == ["dead", "good"]      # failed over past the dead host
     assert all(r.get("result") for r in results)  # re-ran clean on the good host
     assert prov.live == set()                   # both torn down
+
+
+def test_box_connections_carry_serveralive_keepalive(monkeypatch, tmp_path):
+    """Every ssh/scp helper must carry ServerAliveInterval, so a host that dies
+    or goes unreachable MID-command surfaces as a non-zero exit in ~2 min instead
+    of hanging on run_timeout (#43). The live subprocess is otherwise no-cover, so
+    capture the argv each helper builds and assert the liveness options are wired
+    into all four box-connection paths."""
+    seen = []
+
+    class _FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        return _FakeProc()
+
+    def fake_popen(argv, **kw):
+        seen.append(argv)
+        p = _FakeProc()
+        p.stdout = iter(())                      # no streamed lines
+        return p
+
+    monkeypatch.setattr(pe.subprocess, "run", fake_run)
+    monkeypatch.setattr(pe.subprocess, "Popen", fake_popen)
+
+    pe._ssh("k", "h", 22, "echo hi")
+    pe._scp_down("k", "h", 22, "remote", str(tmp_path))
+    pe._scp_up("k", "h", 22, str(tmp_path), "remote")
+    pe._ssh_stream("k", "h", 22, "echo hi", 60, str(tmp_path / "p.log"))
+
+    assert len(seen) == 4                        # all four helpers exercised
+    for argv in seen:
+        joined = " ".join(argv)
+        assert "ServerAliveInterval=30" in joined, f"no keepalive: {argv}"
+        assert "ServerAliveCountMax=4" in joined, f"no count-max: {argv}"
+        assert "ConnectTimeout=15" in joined      # the setup bound is still there
