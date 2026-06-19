@@ -7,7 +7,27 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-06-19
+
 ### Added
+- **Live progress streaming for long legs** (#50) — a multi-hour leg no longer
+  goes dark until exit. `FleetLeg.stream_progress` tees the box's stdout to
+  `<local_out_dir>/<label>/progress.log` line-by-line as it arrives (via
+  `provider_exec._ssh_stream` — `Popen` + a background reader thread; same
+  `(rc, output)` contract as `_ssh`, incl. `124`-on-timeout). A driver advertises
+  where it is with a `[[progress phase=… frac=…]]` convention; `parse_progress_line`
+  parses it (physics-agnostic `key=value`) and `FleetExecutor.progress(leg)`
+  returns the latest marker for a watcher/heartbeat. Off by default (atomic legs
+  byte-for-byte unchanged).
+- **Resumable legs: mid-run fetch + restore-on-retry** (#51) — an atomic leg that
+  lost its box after an hour used to restart from zero. `FleetLeg.resumable` makes
+  a leg resumable: `_fetch_loop` (a daemon thread) pulls the leg's `fetch` dir
+  off-box every `fetch_interval_s` **during** the run, so partial results
+  accumulate on the control plane even if the host dies mid-run; and `_restore`
+  pushes the accumulated local partial back **up** to a replacement box before
+  re-running, so the box's own skip-if-exists continues instead of recomputing.
+  Best-effort (final `_fetch` + leak-reaper remain the backstops); safe against
+  torn reads when the driver writes atomically. Off by default.
 - **Multi-cloud `reap` + `RunPodProvider` reap contract** (#45) — the orphan
   reaper is now provider-agnostic: `reap --provider {vast,runpod}` (a lazy
   name→Provider factory) and string-normalized ids, so the `--ledger` and `--all`
