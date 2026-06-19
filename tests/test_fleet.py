@@ -527,3 +527,69 @@ def test_non_streaming_leg_never_calls_ssh_stream(patched, monkeypatch, tmp_path
     assert r.status == "OK"
     assert ex.progress(leg) is None
     assert not (tmp_path / "L1" / fleet.PROGRESS_LOG).exists()
+
+
+# -- resume (Tier 1): restore-on-retry + incremental fetch -------------------
+
+def test_restore_pushes_local_partial_only_when_present(monkeypatch, tmp_path):
+    ups = []
+    monkeypatch.setattr(fleet, "_scp_up",
+                        lambda key, h, p, local, remote, **k: (ups.append((local, remote)), (0, ""))[1])
+    ex = _exec(FakeProvider([]), tmp_path)
+    leg = FleetLeg(label="L1", command="x", fetch="out_kick", resumable=True)
+    host = types.SimpleNamespace(id="1", ssh_host="h", ssh_port=22)
+    ex._restore(host, leg)                                  # nothing local yet
+    assert ups == []
+    part = tmp_path / "L1" / "out_kick"
+    part.mkdir(parents=True)
+    (part / "bare_relaxed.npz").write_text("x")
+    ex._restore(host, leg)                                  # now restore fires
+    assert len(ups) == 1
+    local, remote = ups[0]
+    assert local.endswith("L1/out_kick")                   # the accumulated partial
+    assert remote == ex.remote_work_dir + "/"              # back to the same remote path
+
+
+def test_fetch_loop_pulls_until_stopped(monkeypatch, tmp_path):
+    ex = _exec(FakeProvider([]), tmp_path, fetch_interval_s=0.001)
+    calls = []
+    stop = threading.Event()
+
+    def fake_fetch(host, leg):
+        calls.append(1)
+        if len(calls) >= 2:
+            stop.set()
+    monkeypatch.setattr(ex, "_fetch", fake_fetch)
+    ex._fetch_loop(None, FleetLeg(label="L1", command="x", resumable=True), stop)
+    assert len(calls) >= 2                                  # ticked, then stopped
+
+
+def test_resumable_leg_restores_then_fetches_end_to_end(patched, monkeypatch, tmp_path):
+    patched(ready=True)
+    ups, downs = [], []
+    monkeypatch.setattr(fleet, "_scp_up", lambda *a, **k: (ups.append(a), (0, ""))[1])
+    monkeypatch.setattr(fleet, "_scp_down", lambda *a, **k: (downs.append(a), (0, ""))[1])
+    part = tmp_path / "L1" / "out_kick"
+    part.mkdir(parents=True)
+    (part / "x.npz").write_text("x")                       # seed a partial -> restore fires
+    leg = FleetLeg(label="L1", command="run.sh", ship=("driver.py",),
+                   fetch="out_kick", done_when="out_kick/manifest.json",
+                   resumable=True)
+    ex = _exec(FakeProvider([_offer("a")]), tmp_path, fetch_interval_s=0.001)
+    ex.run([leg])
+    assert any(str(a[3]).endswith("L1/out_kick") for a in ups)   # restore push happened
+    assert downs                                                  # fetched off-box
+
+
+def test_non_resumable_leg_neither_restores_nor_background_fetches(
+        patched, monkeypatch, tmp_path):
+    """Default (atomic) leg: no restore, no mid-run fetch loop -- only the single
+    final fetch. _restore must never be called."""
+    patched(ready=True)
+    monkeypatch.setattr(fleet, "_scp_down", lambda *a, **k: (0, ""))
+    called = []
+    monkeypatch.setattr(FleetExecutor, "_restore",
+                        lambda self, h, leg: called.append(leg.label))
+    leg = _leg("L1", fetch="out", done_when="out/manifest.json")
+    _exec(FakeProvider([_offer("a")]), tmp_path).run([leg])
+    assert called == []                                    # _restore never invoked
