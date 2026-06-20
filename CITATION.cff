@@ -26,12 +26,18 @@ keywords:
   - gpu
 license: MIT
 version: 0.0.6
-doi: 10.5281/zenodo.20680195
+doi: 10.5281/zenodo.20774254
 date-released: "2026-06-20"
 identifiers:
   - type: doi
-    value: 10.5281/zenodo.20680195
+    value: 10.5281/zenodo.20774254
     description: Concept DOI (resolves to the latest version)
+  - type: doi
+    value: 10.5281/zenodo.20774255
+    description: Version DOI (v0.0.6)
+  - type: doi
+    value: 10.5281/zenodo.20767861
+    description: Version DOI (v0.0.5)
   - type: doi
     value: 10.5281/zenodo.20720607
     description: Version DOI (v0.0.4)
@@ -44,3 +50,6 @@ identifiers:
   - type: doi
     value: 10.5281/zenodo.20680196
     description: Version DOI (v0.0.1)
+  - type: doi
+    value: 10.5281/zenodo.20680195
+    description: Legacy concept DOI (REST-API flow; covers v0.0.1–v0.0.5)
