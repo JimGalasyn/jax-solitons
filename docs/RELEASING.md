@@ -22,20 +22,37 @@ the patch (`0.0.N`) for now; move to `0.1.0` when the campaign contract freezes.
   the PR `MERGEABLE/UNSTABLE`, still mergeable). CodeQL must exist
   (`.github/workflows/codeql.yml`) or merges wait forever on a check that never
   reports.
-- **Zenodo mints the DOI via its REST API, not a GitHub-Release webhook.** We
-  drive it with [`scripts/zenodo_release.py`](../scripts/zenodo_release.py)
-  (token at `~/.zenodo_token`, production `zenodo.org`). **Publishing is
-  permanent** — a published record can't be deleted, only superseded.
+- **Zenodo archives the DOI via the GitHub-Release webhook** (enabled at
+  zenodo.org → Account → GitHub → `jax-solitons`). Publishing a GitHub Release
+  auto-creates and publishes a Zenodo record — no script, no token. Metadata
+  comes from **[`.zenodo.json`](../.zenodo.json)** in the repo root (authors,
+  license, keywords, abstract); keep it in sync with `CITATION.cff`. **Publishing
+  is permanent** — a published record can't be deleted, only superseded.
+  - **DO NOT also run `scripts/zenodo_release.py` while the webhook is enabled** —
+    you'd get the release **double-archived** under two different concept DOIs.
+    The script is kept only as a manual fallback (e.g. webhook outage); it now
+    archives under the *legacy* concept `…20680195` and is not the normal path.
+  - **The webhook mints its OWN concept DOI** the first time it archives a release
+    (it can't adopt the legacy `…20680195` from the old REST-API flow). As of
+    **v0.0.6** the live concept DOI is the webhook's; **v0.0.1–v0.0.5** remain
+    under the legacy concept `…20680195` (their version DOIs still resolve).
 - **PyPI publishes automatically** from the published GitHub Release via trusted
   publishing (OIDC, no token — `.github/workflows/publish-pypi.yml`). The built
   version comes from the static version fields, so make sure they match the tag.
   A one-time *pending publisher* registration is needed before the first publish
   (see step 3). `nwt-substrate` must be on PyPI first (the `oracle` extra now
   depends on it as a normal version specifier).
-- Concept DOI **`10.5281/zenodo.20680195`** resolves to the latest version and
-  never changes (it's the badge); each version gets its own version DOI
-  (v0.0.1 = `…196`). The **release badge uses `?include_prereleases`** because
+- The **concept DOI** resolves to the latest version and never changes (it's the
+  README badge + `CITATION.cff` top-level `doi:`); each version gets its own
+  version DOI. The current concept DOI is the **webhook's** (recorded in
+  `CITATION.cff`); the legacy REST-API concept `10.5281/zenodo.20680195` covers
+  v0.0.1–v0.0.5 only. The **release badge uses `?include_prereleases`** because
   0.0.x are GitHub *pre-releases*.
+- **Zenodo + pre-releases:** confirm the webhook actually archives GitHub
+  *pre-releases* (it has historically skipped them in some configs). After the
+  first 0.0.x release post-switch, verify a record appeared
+  (`curl -s -H "Authorization: Bearer $(cat ~/.zenodo_token)" "https://zenodo.org/api/deposit/depositions?q=jax-solitons&size=5"`);
+  if nothing shows, the fallback is a full (non-pre) release or the manual script.
 - The **Codecov *upload step* in CI needs the `CODECOV_TOKEN`** repo secret
   (already set) — `ci.yml` passes it to `codecov/codecov-action`; without it the
   upload (and hence the badge/coverage) won't update.
@@ -82,23 +99,28 @@ and `curl -s https://pypi.org/pypi/jax-solitons/json -o /dev/null -w '%{http_cod
 > Repo `jax-solitons`, Workflow `publish-pypi.yml`, Environment `pypi` — and create
 > a GitHub Environment named `pypi`.
 
-### 4. Mint the Zenodo DOI
+### 4. Let the webhook archive it — then grab the DOIs
+
+Publishing the GitHub Release (step 3) fires the Zenodo webhook automatically: it
+snapshots the tag's source tarball, applies `.zenodo.json` metadata, and
+**publishes** a new version record (permanent). Nothing to run — just **verify and
+record the DOIs**:
 
 ```bash
-# releases after the first — new VERSION under the existing concept (REQUIRED so
-# the concept DOI keeps resolving to latest; find the latest record id from the
-# concept DOI: curl -s https://zenodo.org/api/records/<conceptrecid> | ... ['id']):
-python scripts/zenodo_release.py vX.Y.Z --new-version-of <latest_record_id>
-#                                                  # add --no-publish to review first
-# the very first release only (mints the concept): ... v0.0.1 --first-release
+# the new version record (newest first); grab its concept + version DOIs:
+curl -s -H "Authorization: Bearer $(cat ~/.zenodo_token)" \
+  "https://zenodo.org/api/deposit/depositions?q=jax-solitons&sort=mostrecent&size=5" \
+  | python -c 'import sys,json; [print(d["metadata"].get("version"), d.get("conceptdoi"), d.get("doi")) for d in json.load(sys.stdin)]'
 ```
 
-It fetches tags, `git archive`s the tag into a source tarball, opens a new-version
-draft (or a fresh record for `--first-release`), uploads, attaches metadata, and
-**publishes** (permanent), printing the **concept** and **version** DOIs. Without
-`--new-version-of` (and with a concept already in CITATION.cff) it refuses to run,
-so a release can't silently fork a second concept DOI. Record both. (Sanity precheck the token:
-`curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat ~/.zenodo_token)" https://zenodo.org/api/deposit/depositions?size=1` → `200`.)
+The **concept DOI** (resolves to latest) and the new **version DOI** are what you
+backfill in step 5. If no new record appears within a few minutes, see the
+"Zenodo + pre-releases" key-fact above — the webhook may be skipping pre-releases.
+
+> **Fallback only (webhook outage):** `python scripts/zenodo_release.py vX.Y.Z
+> --new-version-of <latest_record_id>` archives under the *legacy* concept
+> `…20680195`. Do **not** run it on a release the webhook already archived —
+> that double-archives the version under two concepts.
 
 ### 5. Backfill the DOI
 
@@ -120,9 +142,10 @@ PR, CI green, merge. Optionally refresh the Release body:
 - **`git archive vX.Y.Z` fails** until you `git fetch origin --tags` — `gh
   release create` makes the tag *remotely*, so your local clone doesn't have it
   yet. (`zenodo_release.py` fetches for you.)
-- **Zenodo publish is irreversible.** Verify metadata (run with `--no-publish`
-  and inspect the draft) before publishing. Sandbox (`--sandbox`) needs a
-  *separate* token from `sandbox.zenodo.org`.
+- **Zenodo publish is irreversible.** The webhook publishes automatically on
+  Release, so get `.zenodo.json` right *before* you cut the Release — there's no
+  draft-review step in the webhook path (only superseding fixes a bad record).
+  The fallback script's `--no-publish` still leaves a reviewable draft.
 - **codecov is non-required**, so a red codecov on a release/docs PR does not
   block the merge (it shows `UNSTABLE`, which is still mergeable).
 - **CodeQL must report.** If the run is missing, merges hang on a never-arriving
@@ -138,7 +161,7 @@ PR, CI green, merge. Optionally refresh the Release body:
 - [ ] (first publish only) PyPI pending publisher + `pypi` GitHub Environment registered
 - [ ] `gh release create vX.Y.Z --prerelease` (tag + Release → triggers PyPI)
 - [ ] PyPI publish workflow green; package resolves on pypi.org
-- [ ] `python scripts/zenodo_release.py vX.Y.Z` → concept + version DOIs recorded
-- [ ] DOI backfill PR (`CITATION.cff` `doi`/`identifiers`; README badge if first
-      release)
+- [ ] webhook archived the release → concept + version DOIs recorded (step 4)
+- [ ] DOI backfill PR (`CITATION.cff` `doi`/`identifiers`; README badge if the
+      concept DOI changed)
 - [ ] Release notes refreshed if needed
