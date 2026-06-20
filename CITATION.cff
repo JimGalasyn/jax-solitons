@@ -25,9 +25,9 @@ keywords:
   - jax
   - gpu
 license: MIT
-version: 0.0.5
+version: 0.0.6
 doi: 10.5281/zenodo.20680195
-date-released: "2026-06-19"
+date-released: "2026-06-20"
 identifiers:
   - type: doi
     value: 10.5281/zenodo.20680195
