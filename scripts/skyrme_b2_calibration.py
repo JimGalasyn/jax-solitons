@@ -1,5 +1,15 @@
 """Skyrme B=2 binding calibration (the reason the module exists).
 
+NOTE (2026-06-24): this is the INITIAL local Adam + virial-capture exploration.
+The VALIDATED recipe that recovers the ~4.3% binding is c2=c4=1, L=16 (so the
+box fits the r0*~2 soliton -- c4=4/L=8 made the soliton bigger than the box),
+relaxed with arrested_flow (monotone), in the resolution-ladder farm driver
+`simulations/engine_dogfood/skyrme_converge_batch.py` (null-worldtube). That
+ladder gives E1/bnd 1.198->1.245, E2/bnd 1.152->1.188, binding 3.9%->4.6% as
+dx->0 (bracketing 4.3%). Fixed-lr Adam here does NOT settle (it glides into a
+lattice spike); prefer the farm driver. Defaults below updated to the box that
+fits, but the relaxer is still Adam -- use --c4 1 and read with caution.
+
 Relax the B=1 hedgehog and the B=2 rational-map (torus) seed to their minima
 and check the published Battye-Sutcliffe binding inequality
 
@@ -84,13 +94,13 @@ def relax(model, seed, grid, *, lr, steps, log_every, c2, c4, bound, B_target):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--N", type=int, default=40)
-    ap.add_argument("--L", type=float, default=8.0)
+    ap.add_argument("--L", type=float, default=16.0)
     ap.add_argument("--steps", type=int, default=8000)
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--c2", type=float, default=1.0)
-    ap.add_argument("--c4", type=float, default=4.0)
-    ap.add_argument("--r0_1", type=float, default=None, help="B=1 seed radius")
-    ap.add_argument("--r0_2", type=float, default=None, help="B=2 seed radius")
+    ap.add_argument("--c4", type=float, default=1.0)
+    ap.add_argument("--r0_1", type=float, default=2.0, help="B=1 seed radius (~r0*)")
+    ap.add_argument("--r0_2", type=float, default=2.6, help="B=2 seed radius")
     args = ap.parse_args()
 
     grid = BoxGrid(N=args.N, L=args.L)

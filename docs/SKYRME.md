@@ -72,37 +72,47 @@ a new solver).
 - Vibrational spectra. These are deliberately deferred; v1 is the *classical
   static energy + topology* engine that the binding work needs.
 
-## Calibration result (2026-06-24) — the binding is below the local resolution floor
+## Calibration result (2026-06-24) — ✅ the method RECOVERS the known B=2 binding
 
-First run of the B=2 binding calibration (`scripts/skyrme_b2_calibration.py`,
-local, N=40–44, L=8, c2=1/c4=4, Adam + virial-point capture). The published
-classical massless binding is **~4.3%** (per-baryon energy 1.232 → 1.179 in
-Bogomolny-bound units). Findings:
+The B=2 binding calibration **succeeds**: a resolution ladder
+(`simulations/engine_dogfood/skyrme_converge_*` in null-worldtube, Vast farm)
+recovers the published classical massless binding **~4.3%** (per-baryon energy
+1.232 → 1.179 in Bogomolny-bound units) as dx → 0:
 
-- **Topology holds.** The B=2 rational-map torus keeps B=+2 throughout descent
-  (at c4=1 it *decayed* to B=1 — caught immediately by the exact charge; c4=4
-  fixed it). The exact `baryon_charge` is doing exactly its diagnostic job.
-- **Lattice Derrick collapse is the wall.** Fixed-lr Adam glides through the
-  virial minimum and on into a sub-grid spike where the forward-difference
-  energy sinks **below the Bogomolny bound** (E/bound < 1) — an unambiguous
-  under-resolution flag the NWT deuteron system never had. Arrested flow
-  *stalls* instead (too conservative); the working recipe is Adam + capture the
-  virial-residual minimum among physical (E ≥ bound, B held) samples.
-- **The binding is in the noise.** With *consistent* capture both legs land at
-  **E/bound ≈ 1.16** (B=1 and B=2 within 0.2% of each other), vs the ideal
-  1.232 / 1.179. The lattice pulls both per-baryon energies down ~6%, and the
-  *difference* in that pull between B=1 and B=2 swamps the real ~4% signal →
-  measured binding swings **0–11%** with capture details. **At local dx the
-  known ~4% binding cannot be resolved.**
+| N | dx | E(B=1)/bound | E(B=2)/bound | binding | physical |
+|---|---|---|---|---|---|
+| 64  | 0.250 | 1.198 | 1.152 | 3.91% | ✓ |
+| 96  | 0.167 | 1.230 | 1.176 | 4.39% | ✓ |
+| 128 | 0.125 | 1.240 | 1.184 | 4.52% | ✓ |
+| 160 | 0.100 | 1.245 | 1.188 | 4.58% | ✓ |
+| *ideal* | | *1.232* | *1.179* | *~4.3%* | |
 
-**This is the calibration payoff.** It proves on a *known-answer* system that
-the relaxation/soft-pin method's binding numbers are resolution-starved, not
-just noisy by bad luck — directly explaining the NWT thin-tube E_int scatter
-(a few-% binding is invisible at the resolutions reached). The method isn't
-broken; it needs dx → 0. **Next: a farm convergence study** — scan N at fixed
-(L, c4) until both legs reach E/bound → 1.232 stably, then read the gap. The
-Bogomolny bound is the convergence gate (reject any E < bound). Only then is a
-binding number trustworthy, here or on the NWT carrier.
+Both legs converge to the ideal E/bound (all **above** the Bogomolny bound, B
+held +1/+2 throughout), and the binding brackets the published 4.3%. This was
+**not** the first result — getting here required fixing two bugs the first farm
+run (c4=4, L=8, fixed-lr Adam; binding scattered 12–20%) exposed:
+
+1. **The box must fit the soliton** (the dominant bug). Size ∝ √(c4/c2); a
+   big-box E(r0) scan gives the B=1 natural radius **r0\* ≈ 2.0 at c2=c4=1**, so
+   c4=4 pushes r0\* ≈ 4 > L/2 = 4 — the soliton could not fit L=8, and
+   relaxation found boundary-frustrated lattice states with E *below* the
+   Bogomolny bound (a false "collapse"). Fix: **c4=1, L=16** (r0\* ≈ L/8, fits
+   B=1 and the larger B=2 torus). The Bogomolny floor (E < bound ⇒ unphysical)
+   is what flagged the bad regime.
+2. **Fixed-lr Adam never settles** — it glides through the minimum into a
+   lattice spike or creeps up in the wrong frame (the documented Faddeev
+   pathology). Fix: **`arrested_flow`** (preconditioned backtracking, monotone)
+   parks *at* the minimum; the endpoint is the minimum.
+
+**This is the calibration payoff — and it flips the earlier reading.** The
+relaxation/soft-pin method **can** detect a real binding to ~0.1%, *when the box
+fits the soliton and a monotone-settling relaxer is used*. So the NWT thin-tube
+`E_int ≈ 0` scatter was very likely the **same two bugs** (box scaled to the
+seed geometry rather than the *relaxed* carrier; non-settling Adam), not a
+fundamental failure of the composition method. **Next: re-examine the NWT
+deuteron with this recipe**, and feed `skyrmion_product` (two separated B=1's,
+relative-iso channel) through the soft-pin relaxer to confirm it recovers the
+Skyrme B=2 binding from a *product ansatz* (not just the torus seed).
 
 ## 1. Physics — the target (P-citable)
 
