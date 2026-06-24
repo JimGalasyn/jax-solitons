@@ -292,3 +292,114 @@ def flux_threaded_knot_seed(grid: BoxGrid, p: int, q: int, m: int = 1,
         A[:, 2].reshape(N, N, N),
     ])
     return jnp.asarray(state, dtype=grid.dtype)
+
+
+# --- SU(2)/S^3 Skyrmion seeds (models.skyrme) -------------------------------
+#
+# State: a real unit 4-vector field phi = (phi0, phi1, phi2, phi3), |phi| = 1,
+# shape (4, N, N, N), encoding U = phi0 + i phi_a sigma_a in SU(2) ~ S^3.
+# Built with the same compact C^2 (smootherstep) profile machinery as the
+# hopfion seeds, so each soliton is exactly vacuum (U = +1, phi = (1,0,0,0))
+# beyond its radius.
+
+
+def _hedgehog_profile(r, r0):
+    """Skyrme radial profile f(r): pi at r=0 -> 0 for r >= r0, C^2
+    (smootherstep). f(0)=pi gives U(0) = -1, the standard hedgehog winding."""
+    t = np.clip(r / r0, 0.0, 1.0)
+    s = t**3 * (10.0 - 15.0 * t + 6.0 * t**2)   # smootherstep (C^2)
+    return np.pi * (1.0 - s)
+
+
+def skyrmion_hedgehog(grid: BoxGrid, r0: float | None = None,
+                      center=(0.0, 0.0, 0.0)) -> jnp.ndarray:
+    """B=1 hedgehog Skyrmion: U = cos f(r) + i sin f(r) (r_hat . sigma), i.e.
+    phi0 = cos f, phi_a = sin f * r_hat_a, with f the pi->0 profile. Unit
+    4-vector field, shape (4, N, N, N). deg(U) = 1.
+
+    r0 is the profile (soliton) radius; defaults to a quarter box so the tube
+    fits with vacuum margin. The hedgehog is the B=1 ansatz only -- use
+    skyrmion_rational_map for multi-B seeds."""
+    if r0 is None:
+        r0 = 0.25 * grid.L
+    X, Y, Z = (np.asarray(c, dtype=np.float64) for c in grid.coords())
+    x0, y0, z0 = center
+    x, y, z = X - x0, Y - y0, Z - z0
+    r = np.sqrt(x**2 + y**2 + z**2)
+    f = _hedgehog_profile(r, r0)
+    rsafe = np.where(r > 0, r, 1.0)
+    sf = np.sin(f)
+    phi = np.stack([np.cos(f), sf * x / rsafe, sf * y / rsafe, sf * z / rsafe])
+    return jnp.asarray(phi, dtype=grid.dtype)
+
+
+def skyrmion_rational_map(grid: BoxGrid, B: int = 2, r0: float | None = None,
+                          center=(0.0, 0.0, 0.0)) -> jnp.ndarray:
+    """Degree-B Skyrmion via the Houghton-Manton-Sutcliffe rational-map ansatz:
+    U(x) = cos f(r) + i sin f(r) (n_R . sigma), where n_R is the S^2 point of
+    the rational map R(z) = z^B evaluated at the Riemann coordinate
+    z = (x + i y) / (r + z) of the spatial direction. deg(U) = B. The B=2 case
+    relaxes to the axially-symmetric torus (the deuteron). Unit 4-vector field,
+    shape (4, N, N, N)."""
+    if r0 is None:
+        r0 = 0.25 * grid.L
+    X, Y, Z = (np.asarray(c, dtype=np.float64) for c in grid.coords())
+    x0, y0, z0 = center
+    x, y, z = X - x0, Y - y0, Z - z0
+    r = np.sqrt(x**2 + y**2 + z**2)
+    rho = np.sqrt(x**2 + y**2)
+    # Riemann sphere coordinate of the spatial direction, z = tan(theta/2)e^{i
+    # phi}; stereographic from the south pole (-z), where r + z -> 0. On that
+    # axis num=den=0 (a 0/0 coordinate singularity), but the limit of R=z^B is
+    # |R|->inf -> n_R=(0,0,-1) for every B, so override it explicitly.
+    zc = (x + 1j * y) / (r + z + 1e-12)
+    Rz = zc**B                                  # symmetric degree-B map
+    a, b = np.real(Rz), np.imag(Rz)
+    den = 1.0 + a**2 + b**2
+    nR = np.stack([2.0 * a / den, 2.0 * b / den, (1.0 - a**2 - b**2) / den])
+    south = (rho < 1e-9) & (z < 0.0)            # the -z symmetry axis
+    nR[0] = np.where(south, 0.0, nR[0])
+    nR[1] = np.where(south, 0.0, nR[1])
+    nR[2] = np.where(south, -1.0, nR[2])
+    f = _hedgehog_profile(r, r0)
+    sf = np.sin(f)
+    phi = np.stack([np.cos(f), sf * nR[0], sf * nR[1], sf * nR[2]])
+    return jnp.asarray(phi, dtype=grid.dtype)
+
+
+def _quaternion_product(a, b):
+    """Hamilton product of two unit-4-vector fields a = (a0, a_vec),
+    b = (b0, b_vec) (each (4, ...)); the SU(2) group product U_a U_b."""
+    a0, av = a[0], a[1:]
+    b0, bv = b[0], b[1:]
+    s = a0 * b0 - (av[0] * bv[0] + av[1] * bv[1] + av[2] * bv[2])
+    cross = np.stack([
+        av[1] * bv[2] - av[2] * bv[1],
+        av[2] * bv[0] - av[0] * bv[2],
+        av[0] * bv[1] - av[1] * bv[0],
+    ])
+    v = a0 * bv + b0 * av + cross
+    return np.concatenate([s[None], v])
+
+
+def skyrmion_product(grid: BoxGrid, sep: float = 2.0, axis: int = 0,
+                     rel_iso=None, r0: float | None = None) -> jnp.ndarray:
+    """Product ansatz of two B=1 hedgehogs, U = U_A(x - d/2) U_B(x + d/2),
+    separated by `sep` along `axis`, with an optional relative iso-orientation
+    `rel_iso` (a 3x3 SO(3) rotation) applied to U_B's pion field. This is the
+    input to the binding cross-check: feed the SAME rigid-composition /
+    soft-pin method we use on the NWT carrier and compare against the known
+    Skyrme B=2 binding (the attractive channel is the relative-iso-pi rotation
+    about the separation axis). Unit 4-vector field, shape (4, N, N, N)."""
+    d = np.zeros(3)
+    d[axis] = 0.5 * sep
+    cA = tuple(-d)
+    cB = tuple(+d)
+    phiA = np.asarray(skyrmion_hedgehog(grid, r0=r0, center=cA), np.float64)
+    phiB = np.asarray(skyrmion_hedgehog(grid, r0=r0, center=cB), np.float64)
+    if rel_iso is not None:
+        R = np.asarray(rel_iso, np.float64)
+        phiB = np.concatenate([phiB[:1], np.einsum("ab,bxyz->axyz", R, phiB[1:])])
+    phi = _quaternion_product(phiA, phiB)
+    phi = phi / np.sqrt((phi**2).sum(axis=0, keepdims=True))   # re-normalise
+    return jnp.asarray(phi, dtype=grid.dtype)

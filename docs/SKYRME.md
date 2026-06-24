@@ -1,8 +1,37 @@
 # Design spec — `models/skyrme.py` (the SU(2) Skyrme model)
 
-Status: **proposed** (not yet implemented). Author-of-record: NWT binding-ledger
-work. This spec is written against `DESIGN.md` P1–P10 and the `VALIDATION.md`
-evidence tiers; it ships with its exactness tests or it doesn't ship (P8).
+Status: **IMPLEMENTED** (v1-thin, 2026-06-24). `models/skyrme.py` +
+`seeds.py` (hedgehog / rational-map / product) + `tests/test_skyrme_exact.py`
+(17 Tier-1 exact tests, all green). Author-of-record: NWT binding-ledger work.
+Written against `DESIGN.md` P1–P10 and the `VALIDATION.md` evidence tiers; it
+ships with its exactness tests (P8).
+
+## Implementation note — the baryon density (§3 deviation)
+
+The spec proposed an exactly-quantised baryon **density** via the signed
+*spherical-volume of the geodesic 3-simplex on S³* (the Berg–Lüscher area form,
+one dimension up). That turns out to have **no elementary closed form** — the
+volume of a spherical tetrahedron is a Murakami–Yano dilogarithm, not the
+"clean 4×4 determinant + arccos" the spec optimistically guessed. As shipped,
+`baryon_charge` instead computes the **degree of the piecewise-linear map**
+T³→S³ by a **regular-value preimage count**: Kuhn-triangulate each cube into 6
+tetrahedra, and for a generic target point sum the signed coverings (a covering
+is detected by Cramer-sign tests on 4×4 determinants — division-free). This is:
+
+- **exactly integer** (a finite sum of ±1) — even cleaner than the area-form
+  flux test (which lands within 1e-4 of an integer; this lands *on* it);
+- **probe-independent** — the same integer for every generic regular value,
+  which *is* the topological-invariance statement and is the headline Tier-1
+  test;
+- **not differentiable**. The spec wanted a differentiable density "for
+  descent", but that requirement dissolves: B is a *diagnostic* (a `charge`,
+  like `hopf_charge`), never a loss term. The smooth O(4) Skyrme quartic in the
+  energy is what carries the descent barrier — exactly as the area-form `E4`
+  does for Faddeev while `hopf_charge` is the separate diagnostic.
+
+If a differentiable B is ever needed (e.g. to *pin* baryon number in a
+constraint), the naive `εⁱʲᵏ Tr(L_iL_jL_k)` density is the smooth — but
+non-quantised — fallback; deferred (YAGNI) for v1.
 
 ## 0. Why — and the scope boundary
 
