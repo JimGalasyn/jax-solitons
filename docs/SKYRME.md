@@ -72,6 +72,38 @@ a new solver).
 - Vibrational spectra. These are deliberately deferred; v1 is the *classical
   static energy + topology* engine that the binding work needs.
 
+## Calibration result (2026-06-24) — the binding is below the local resolution floor
+
+First run of the B=2 binding calibration (`scripts/skyrme_b2_calibration.py`,
+local, N=40–44, L=8, c2=1/c4=4, Adam + virial-point capture). The published
+classical massless binding is **~4.3%** (per-baryon energy 1.232 → 1.179 in
+Bogomolny-bound units). Findings:
+
+- **Topology holds.** The B=2 rational-map torus keeps B=+2 throughout descent
+  (at c4=1 it *decayed* to B=1 — caught immediately by the exact charge; c4=4
+  fixed it). The exact `baryon_charge` is doing exactly its diagnostic job.
+- **Lattice Derrick collapse is the wall.** Fixed-lr Adam glides through the
+  virial minimum and on into a sub-grid spike where the forward-difference
+  energy sinks **below the Bogomolny bound** (E/bound < 1) — an unambiguous
+  under-resolution flag the NWT deuteron system never had. Arrested flow
+  *stalls* instead (too conservative); the working recipe is Adam + capture the
+  virial-residual minimum among physical (E ≥ bound, B held) samples.
+- **The binding is in the noise.** With *consistent* capture both legs land at
+  **E/bound ≈ 1.16** (B=1 and B=2 within 0.2% of each other), vs the ideal
+  1.232 / 1.179. The lattice pulls both per-baryon energies down ~6%, and the
+  *difference* in that pull between B=1 and B=2 swamps the real ~4% signal →
+  measured binding swings **0–11%** with capture details. **At local dx the
+  known ~4% binding cannot be resolved.**
+
+**This is the calibration payoff.** It proves on a *known-answer* system that
+the relaxation/soft-pin method's binding numbers are resolution-starved, not
+just noisy by bad luck — directly explaining the NWT thin-tube E_int scatter
+(a few-% binding is invisible at the resolutions reached). The method isn't
+broken; it needs dx → 0. **Next: a farm convergence study** — scan N at fixed
+(L, c4) until both legs reach E/bound → 1.232 stably, then read the gap. The
+Bogomolny bound is the convergence gate (reject any E < bound). Only then is a
+binding number trustworthy, here or on the NWT carrier.
+
 ## 1. Physics — the target (P-citable)
 
 Field `U(x) ∈ SU(2)`. Left current `L_i = U†∂_iU` (su(2)-valued). Static energy
