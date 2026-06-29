@@ -97,6 +97,11 @@ def test_energy_global_o3_invariant():
                   [-ax[1], ax[0], 0]])
     R = np.eye(3) + np.sin(th) * K + (1 - np.cos(th)) * (K @ K)
     nR = jnp.einsum("ab,bxyz->axyz", jnp.asarray(R, dtype=n.dtype), n)
+    # A target rotation maps S^2 to itself, so |nR| = 1; renormalize to undo the
+    # ~5e-4 norm drift that GPU float32 matmul (reduced/TF32 precision) injects via
+    # the einsum -- the energy genuinely depends on |n|, and float64 gives an exact
+    # match, so this removes a numerical artifact, not a real asymmetry.
+    nR = nR / jnp.linalg.norm(nR, axis=0, keepdims=True)
     assert np.isclose(float(model.energy(nR, GRID)), E0, rtol=1e-4)
     assert np.isclose(float(hopf_charge(nR, GRID)), Q0, atol=1e-3)
 
