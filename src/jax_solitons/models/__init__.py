@@ -27,6 +27,12 @@ from jax_solitons.models.gauged_faddeev import (
     n_from_doublet,
 )
 from jax_solitons.models.gpe import GPEKineticTerm, GPEPotentialTerm, gpe_model
+from jax_solitons.models.nlkg import (
+    NLKGKineticTerm,
+    NLKGMassTerm,
+    NLKGPotentialTerm,
+    nlkg_model,
+)
 
 __all__ = [
     "CP1Constraint",
@@ -38,8 +44,12 @@ __all__ = [
     "GPEPotentialTerm",
     "HiggsPotentialTerm",
     "MagneticTerm",
+    "NLKGKineticTerm",
+    "NLKGMassTerm",
+    "NLKGPotentialTerm",
     "S2Constraint",
     "abelian_higgs_model",
+    "nlkg_model",
     "magnetic_flux",
     "vortex_seed",
     "faddeev_cp1_model",
