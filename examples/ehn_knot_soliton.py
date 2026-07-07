@@ -93,7 +93,7 @@ from functools import partial
 import numpy as np
 import jax
 jax.config.update("jax_enable_x64", True)
-import jax.numpy as jnp
+import jax.numpy as jnp  # noqa: E402
 
 PI = np.pi
 
@@ -219,6 +219,12 @@ def relax_iter(u, s, w, dx, lam, kappa, C, U, eps_a, alpha, beta, q1, q2):
 
 
 def energy_report(u, s, w, dx, lam, kappa, C, U, eps_a, q1=1.0, q2=0.0):
+    """PHYSICAL energy breakdown for comparison with EHN's reported E(N_link):
+    mag = 1/2|B|^2 = 1/2|curl A|^2, and the augmented-functional bookkeeping terms
+    (gauge-fixing (U/2)(div A)^2 and the B=curl A constraint of Eq. 10) are omitted
+    because they vanish at the solution -- including them would make `total`
+    incomparable to the paper's physical E. `E_disc` (the quantity minimised) keeps
+    them; the aux-constraint residual is monitored via B vs curl A separately."""
     p1r, p1i, p2r, p2i, Ax, Ay, Az, Bx, By, Bz = u
     p1 = p1r + 1j * p1i; p2 = p2r + 1j * p2i
     A = (Ax, Ay, Az)
@@ -241,7 +247,12 @@ def energy_report(u, s, w, dx, lam, kappa, C, U, eps_a, q1=1.0, q2=0.0):
 # --------------------------------------------------------------------------
 def _build_from_curves(N, L, phi1_curves, phi2_curves, core, n=400):
     """Two O(4) fields whose phi1 / phi2 zero-lines are the given closed curves,
-    each carrying a 2pi phase winding (Van Oosterom-Strackee solid angle)."""
+    each carrying a 2pi phase winding (Van Oosterom-Strackee solid angle).
+
+    ONE-TIME initial-condition build. The distance/solid-angle loops are O(N^3 * n)
+    grid ops (n = curve-segment count), which is a fixed cost dwarfed by the >~10^4
+    relaxation steps; on a GPU it is ~1 min even at 320^3. If IC build ever
+    dominates, vectorise over the n curve points with a single batched op."""
     g = np.linspace(-L / 2, L / 2, N, endpoint=False)
     Xn, Yn, Zn = np.meshgrid(g, g, g, indexing="ij")
     X, Y, Z = jnp.asarray(Xn), jnp.asarray(Yn), jnp.asarray(Zn)
@@ -434,15 +445,18 @@ def demo():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="EHN knot soliton (arXiv:2407.11731) faithful reproduction")
-    ap.add_argument("--demo", action="store_true", help="normalisation + saddle + dilemma (~2 min)")
-    ap.add_argument("--relax", action="store_true", help="full faithful relaxation from screened IC")
-    ap.add_argument("--N", type=int, default=128)
-    ap.add_argument("--L", type=float, default=None)
-    ap.add_argument("--nlink", type=int, default=4)
-    ap.add_argument("--R", type=float, default=None)
-    ap.add_argument("--C", type=float, default=400.0)
-    ap.add_argument("--steps", type=int, default=8000)
-    ap.add_argument("--cramp", type=int, default=6000)
+    ap.add_argument("--demo", action="store_true",
+                    help="run the normalisation + saddle + dilemma diagnostics (the default; ~2 min)")
+    ap.add_argument("--relax", action="store_true",
+                    help="run the full faithful relaxation instead of the default --demo diagnostics")
+    # the following configure --relax only; --demo uses fixed reference sizes
+    ap.add_argument("--N", type=int, default=128, help="(--relax only) grid points per side")
+    ap.add_argument("--L", type=float, default=None, help="(--relax only) box size, default 0.8*N")
+    ap.add_argument("--nlink", type=int, default=4, help="(--relax only) linking number")
+    ap.add_argument("--R", type=float, default=None, help="(--relax only) knot radius, default 0.35*L")
+    ap.add_argument("--C", type=float, default=400.0, help="(--relax only) CS coupling")
+    ap.add_argument("--steps", type=int, default=8000, help="(--relax only) relaxation steps")
+    ap.add_argument("--cramp", type=int, default=6000, help="(--relax only) C-ramp length (0 = C on from start)")
     a = ap.parse_args()
     if a.relax:
         relax(N=a.N, L=a.L, nlink=a.nlink, R=a.R, C=a.C, steps=a.steps, cramp=a.cramp)
