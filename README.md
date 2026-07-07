@@ -186,10 +186,13 @@ A faithful, self-contained reproduction of the **Eto–Hamada–Nitta two-scalar
 knot soliton** ([arXiv:2407.11731](https://arxiv.org/abs/2407.11731), PRL 135,
 091603) — their exact energy functional and auxiliary-field relaxation, mapped
 line-for-line onto the paper's equations, with the electric-sector normalisation
-verified against the continuum result:
+verified against the continuum result. Imposing the linking-charge lock they
+assert topologically reproduces their binding energy (E ≈ 6000 v/g); the open
+question is what makes that lock self-enforcing:
 
 ```bash
-python examples/ehn_knot_soliton.py --demo    # normalisation + saddle + g2-vs-electric dilemma
+python examples/ehn_knot_soliton.py --demo          # normalisation + saddle + g2-vs-electric dilemma
+python examples/ehn_knot_soliton.py --enforce-lock  # given the rho<->N_link lock, it binds
 ```
 
 ## Releasing
