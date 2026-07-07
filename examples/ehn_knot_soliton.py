@@ -257,7 +257,8 @@ def energy_report(u, s, w, dx, lam, kappa, C, U, eps_a, q1=1.0, q2=0.0):
 def E_pen(u, s, w, dx, lam, kappa, C, U, eps_a, q1, q2, Lam, target):
     """E_disc plus a soft penalty 1/2 Lam (integral rho - target)^2 that ties the
     Chern-Simons charge integral rho = dx^3 sum(B . grad a) to its topological value
-    (target = -(2pi)^2 N_link for this IC; the sign matches the knot's rho < 0)."""
+    target = sign(rho) * (2pi)^2 N_link (the caller picks the sign from the IC's own
+    integral rho; for the default knot rho < 0, so target = -(2pi)^2 N_link)."""
     return (E_disc(u, s, w, dx, lam, kappa, C, U, eps_a, q1, q2)
             + 0.5 * Lam * (dx ** 3 * jnp.sum(_rho(u, dx, eps_a)) - target) ** 2)
 
@@ -485,8 +486,16 @@ def enforce_lock(N=64, L=51.2, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.00
     dx = L / N
     kv = kvecs(N, L)
     floor = (2 * PI) ** 2 * nlink
-    print(f"[5] Enforce the rho<->N_link lock  (N={N} L={L} R={R} nlink={nlink} C={C}; "
-          f"target integral rho = -{floor:.0f}; EHN E~6000)")
+    C_final = C * min(1.0, steps / cramp) if cramp > 0 else C   # C actually reached
+    # The IC is deterministic, so evaluate its integral-rho sign ONCE to fix (and report)
+    # the constraint target = sign(rho0) * floor for all Lam.
+    p1, p2 = build_ic_knot(N, L, nlink, R, core)
+    A0 = seed_screened_A(p1, dx, eps_a, q1); B0 = curlA(*A0, dx)
+    u0 = (jnp.real(p1), jnp.imag(p1), jnp.real(p2), jnp.imag(p2), *A0, *B0)
+    rho0 = float(dx ** 3 * jnp.sum(_rho(u0, dx, eps_a)))
+    target = -floor if rho0 < 0 else floor
+    print(f"[5] Enforce the rho<->N_link lock  (N={N} L={L} R={R} nlink={nlink} C->{C_final:.0f}; "
+          f"target integral rho = {target:+.0f}; EHN E~6000)")
     print(f"    {'Lam':>5}  {'link':>6} {'Q':>6} {'E':>8} {'mag':>6} {'el':>8}")
     for Lam in lambdas:
         phi1, phi2 = build_ic_knot(N, L, nlink, R, core)
@@ -495,8 +504,7 @@ def enforce_lock(N=64, L=51.2, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.00
         Bx, By, Bz = curlA(Ax, Ay, Az, dx)
         u = (jnp.real(phi1), jnp.imag(phi1), jnp.real(phi2), jnp.imag(phi2), Ax, Ay, Az, Bx, By, Bz)
         s = z; w = (z, z, z)
-        rho0 = float(dx ** 3 * jnp.sum(_rho(u, dx, eps_a)))
-        target = -floor if rho0 < 0 else floor           # match the knot's rho sign
+        Cn = C_final
         for n in range(steps + 1):
             Cn = C * min(1.0, n / cramp) if cramp > 0 else C
             if n < steps:
@@ -504,7 +512,7 @@ def enforce_lock(N=64, L=51.2, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.00
                                     alpha, beta, q1, q2, Lam, target)
         p1 = u[0] + 1j * u[1]; p2 = u[2] + 1j * u[3]
         Q = skyrmion_number(p1, p2, kv, dx)
-        E = energy_report(u, s, w, dx, lam, kappa, C, U, eps_a, q1, q2)
+        E = energy_report(u, s, w, dx, lam, kappa, Cn, U, eps_a, q1, q2)  # report at the C reached
         flag = "  <- E ~ EHN 6000" if 4500 < E["total"] < 8000 else ""
         print(f"    {Lam:>5}  {E['link']/floor*100:+5.0f}% {Q:+.2f} {E['total']:8.0f} "
               f"{E['mag']:6.0f} {E['elec']:8.0f}{flag}", flush=True)
@@ -528,7 +536,7 @@ if __name__ == "__main__":
                     help="finding 5: impose the rho<->N_link lock by hand and show it binds (~3 min)")
     ap.add_argument("--relax", action="store_true",
                     help="run the full faithful relaxation instead of the default --demo diagnostics")
-    # the following configure --relax only; --demo uses fixed reference sizes
+    # the following configure --relax only; --demo and --enforce-lock use fixed reference sizes
     ap.add_argument("--N", type=int, default=128, help="(--relax only) grid points per side")
     ap.add_argument("--L", type=float, default=None, help="(--relax only) box size, default 0.8*N")
     ap.add_argument("--nlink", type=int, default=4, help="(--relax only) linking number")
