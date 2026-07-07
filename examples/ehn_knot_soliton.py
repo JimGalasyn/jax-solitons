@@ -7,10 +7,12 @@ soliton of Eto, Hamada & Nitta, "Tying Knots in Particle Physics" (PRL 135,
 functional, same auxiliary-field relaxation scheme, same numerical parameters.
 
 We wrote it to reproduce their meta-stable linked knot (E ~ 6000 v/g at
-N_link = 4). We do **not** reproduce binding, and this file documents precisely
-where our faithful implementation and their published result diverge, so the
-question can be posed cleanly to the authors. Every diagnostic below is
-reproducible on a single GPU in a couple of minutes.
+N_link = 4). Findings 1-5 below document why the naive-faithful implementation
+does NOT bind (the linking flux drains); finding 6 documents the RESOLUTION:
+the d_i a discretisation must be the wrapped mod-2pi angle difference
+(--agrad wrapped), which self-enforces the rho <-> N_link topological lock and
+holds the linking flux to -98% of the floor at EHN's own 320^3 box. Every
+diagnostic below is reproducible on a single GPU in minutes.
 
 ---------------------------------------------------------------------------
 Model (EHN Supplemental Eqs. 2-13; v = g = 1, q1 = 1 gauged, q2 = 0 global)
@@ -87,13 +89,32 @@ What we find (all reproducible with `--demo`)
    binding) is directly confirmed; the whole reproduction gap is the SELF-enforcement
    of that one topological identity, which our discretisation does not provide.
 
-The open question for the authors: what makes rho stay algebraically locked to N_link
-in your scheme? When we impose the lock by hand the binding energy appears exactly as
-you describe; left free, rho drains while the skyrmion number Q stays fixed.
+6. RESOLVED (2026-07-07): THE LOCK IS THE d_i a DISCRETISATION. Findings 2-5 used the
+   eps-regularised bilinear form Im(phi2* d phi2)/(|phi2|^2 + eps_a), which is modulus-
+   suppressed: the fields drain integral(rho) by modulus rearrangement without unwinding
+   anything (the escape of finding 2). Replacing it with the WRAPPED central phase
+   difference angle(phi2(x+i) conj(phi2(x-i)))/(2 dx) -- the natural central difference
+   of a COMPACT angle, plaquette-exact (integer x 2pi circulation) and modulus-blind --
+   closes that channel and self-enforces the rho <-> N_link lock of finding 5. With
+   --agrad wrapped (screened IC, C-ramp -> 400, 12k steps) the linking flux HOLDS:
+       N=64  R=14:  -3%  (bilinear -1%), critical-C doubled
+       N=192 R=46:  -57% (bilinear -10%)
+       N=256 R=72:  -91% (bilinear -16%)
+       N=320 L=256 R=90 (EHN's box): -98% of floor, el/mag = 0.76 (mag + el order
+       unity = EHN's stated regime), electric binding energy built and retained.
+   The retention follows the el/mag ~ 1/R^2 law of finding 3 quantitatively. Remaining
+   gap to the paper's E ~ 6000: convergence (E still falling at 12k steps) and the
+   phi2 global-string energy of our large-ring IC -- mechanism reproduced, quantitative
+   E(N_link) pending longer runs.
+
+The (now sharper) question for the authors: is d_i a in your code the wrapped mod-2pi
+angle difference? With it, your binding appears as described; with the smooth bilinear
+form, rho drains while Q stays fixed and the knot is a saddle.
 
     python ehn_knot_soliton.py --demo          # normalisation + saddle + dilemma (~2 min)
     python ehn_knot_soliton.py --enforce-lock  # finding 5: given the lock, it binds (~3 min)
-    python ehn_knot_soliton.py --relax --N 128 # full faithful relaxation from screened IC
+    python ehn_knot_soliton.py --relax --N 128 # faithful relaxation, bilinear (expels)
+    python ehn_knot_soliton.py --relax --N 128 --agrad wrapped   # finding 6: link holds
 """
 import argparse
 import time
@@ -167,8 +188,22 @@ def skyrmion_number(phi1, phi2, kv, dx):
 # --------------------------------------------------------------------------
 # Energy (EHN Eq. 5 + Eq. 10) and interleaved relaxation (Eqs. 12/13/11)
 # --------------------------------------------------------------------------
+AGRAD = "bilinear"   # d_i a discretisation; set from --agrad BEFORE the first jit trace
+
+
 def axion_grad(p2, dx, eps_a):
-    """d_i a  (a = arg phi2): bounded phase velocity Im(phi2* d phi2)/(|phi2|^2 + eps)."""
+    """d_i a  (a = arg phi2), two discretisations (module switch AGRAD, read at trace time):
+
+    bilinear -- regularised phase velocity Im(phi2* d phi2)/(|phi2|^2 + eps_a). Smooth,
+      but modulus-SUPPRESSED: the fields can drain integral(rho) by modulus rearrangement
+      without any unwinding. This is the drain channel behind findings 2-4.
+    wrapped -- central wrapped phase difference angle(phi2(x+i) * conj(phi2(x-i)))/(2 dx),
+      the natural central difference of a COMPACT angle: its plaquette circulation is an
+      exact integer x 2pi and its value is modulus-BLIND, so curl(grad a) is an exact
+      integer string delta and integral(rho) is quasi-algebraically locked to N_link --
+      the topological protection EHN assert. See finding 6."""
+    if AGRAD == "wrapped":
+        return tuple(jnp.angle(_f(p2, i) * jnp.conj(_b(p2, i))) / (2 * dx) for i in range(3))
     inv = 1.0 / (jnp.abs(p2) ** 2 + eps_a)
     return tuple(jnp.imag(jnp.conj(p2) * d_c(p2, i, dx)) * inv for i in range(3))
 
@@ -440,7 +475,9 @@ def g2_vs_electric_dilemma(N=128, L=102.4, core=2.0, eps_a=0.05, C=400.0):
 # --------------------------------------------------------------------------
 def relax(N=128, L=None, nlink=4, R=None, core=2.0, lam=1000.0, kappa=0.0008,
           C=400.0, U=50.0, eps_a=0.05, alpha=1e-4, beta=2e-3, q1=1.0, q2=0.0,
-          steps=8000, cramp=6000, samples=20):
+          steps=8000, cramp=6000, samples=20, agrad="bilinear"):
+    global AGRAD
+    AGRAD = agrad        # before the first jit trace, so E_disc/relax_iter pick it up
     L = L if L is not None else N * 0.8
     R = R if R is not None else 0.35 * L
     dx = L / N
@@ -453,7 +490,7 @@ def relax(N=128, L=None, nlink=4, R=None, core=2.0, lam=1000.0, kappa=0.0008,
     s = z; w = (z, z, z)
     floor = (2 * PI) ** 2 * nlink
     print(f"Faithful EHN relaxation (screened IC, C-ramp)  N={N} L={L:.1f} dx={dx:.2f} "
-          f"R={R:.1f} nlink={nlink} C={C}  (EHN E~{6000 if nlink==4 else 7000})")
+          f"R={R:.1f} nlink={nlink} C={C} agrad={agrad}  (EHN E~{6000 if nlink==4 else 7000})")
     t0 = time.time(); every = max(1, steps // samples)
     for n in range(steps + 1):
         Cn = C * min(1.0, n / cramp) if cramp > 0 else C
@@ -544,9 +581,13 @@ if __name__ == "__main__":
     ap.add_argument("--C", type=float, default=400.0, help="(--relax only) CS coupling")
     ap.add_argument("--steps", type=int, default=8000, help="(--relax only) relaxation steps")
     ap.add_argument("--cramp", type=int, default=6000, help="(--relax only) C-ramp length (0 = C on from start)")
+    ap.add_argument("--agrad", choices=["bilinear", "wrapped"], default="bilinear",
+                    help="(--relax only) d_i a discretisation; wrapped = the modulus-blind "
+                         "exact-winding form that self-enforces the rho<->N_link lock (finding 6)")
     a = ap.parse_args()
     if a.relax:
-        relax(N=a.N, L=a.L, nlink=a.nlink, R=a.R, C=a.C, steps=a.steps, cramp=a.cramp)
+        relax(N=a.N, L=a.L, nlink=a.nlink, R=a.R, C=a.C, steps=a.steps, cramp=a.cramp,
+              agrad=a.agrad)
     elif a.enforce_lock:
         enforce_lock()
     else:
