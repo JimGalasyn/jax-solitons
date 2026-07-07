@@ -182,6 +182,16 @@ run dirs, streamed ledgers, triggered core-curve capture):
 JAX_ENABLE_X64=1 python examples/faddeev_campaign.py   # writes _campaign_out/
 ```
 
+A faithful, self-contained reproduction of the **Eto–Hamada–Nitta two-scalar
+knot soliton** ([arXiv:2407.11731](https://arxiv.org/abs/2407.11731), PRL 135,
+091603) — their exact energy functional and auxiliary-field relaxation, mapped
+line-for-line onto the paper's equations, with the electric-sector normalisation
+verified against the continuum result:
+
+```bash
+python examples/ehn_knot_soliton.py --demo    # normalisation + saddle + g2-vs-electric dilemma
+```
+
 ## Releasing
 
 Version history: [`CHANGELOG.md`](CHANGELOG.md) (structured) and
