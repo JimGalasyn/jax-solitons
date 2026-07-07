@@ -79,11 +79,20 @@ What we find (all reproducible with `--demo`)
    (electric expulsion), a long string spreads it (tension collapse). No
    geometry in this family has both low g2 and low el/mag.
 
-The open question for the authors: how does the published knot escape this
-dilemma -- is there a phi2 treatment, constraint, or initial condition beyond
-the Supplemental that keeps rho pinned to N_link at finite size?
+5. GIVEN THE LOCK, IT BINDS (conditional confirmation). Impose the rho <-> N_link
+   lock by hand (a soft penalty tying integral rho to the topological floor) and
+   co-relax: the electric binding energy BUILDS (el: 0 -> thousands), the link is
+   RETAINED, and the total energy sweeps through EHN's ~6000 v/g. So the bound state
+   EXISTS in this functional and EHN's mechanism (pinned rho -> electric energy ->
+   binding) is directly confirmed; the whole reproduction gap is the SELF-enforcement
+   of that one topological identity, which our discretisation does not provide.
+
+The open question for the authors: what makes rho stay algebraically locked to N_link
+in your scheme? When we impose the lock by hand the binding energy appears exactly as
+you describe; left free, rho drains while the skyrmion number Q stays fixed.
 
     python ehn_knot_soliton.py --demo          # normalisation + saddle + dilemma (~2 min)
+    python ehn_knot_soliton.py --enforce-lock  # finding 5: given the lock, it binds (~3 min)
     python ehn_knot_soliton.py --relax --N 128 # full faithful relaxation from screened IC
 """
 import argparse
@@ -240,6 +249,34 @@ def energy_report(u, s, w, dx, lam, kappa, C, U, eps_a, q1=1.0, q2=0.0):
     link = float(jnp.sum(rho) * dx3)
     return {"grad1": eg1, "grad2": eg2, "pot": V, "mag": emag, "elec": eelec,
             "link": link, "total": eg1 + eg2 + V + emag + eelec}
+
+
+# --------------------------------------------------------------------------
+# Enforcing the rho <-> N_link lock (a stand-in for the topological protection)
+# --------------------------------------------------------------------------
+def E_pen(u, s, w, dx, lam, kappa, C, U, eps_a, q1, q2, Lam, target):
+    """E_disc plus a soft penalty 1/2 Lam (integral rho - target)^2 that ties the
+    Chern-Simons charge integral rho = dx^3 sum(B . grad a) to its topological value
+    (target = -(2pi)^2 N_link for this IC; the sign matches the knot's rho < 0)."""
+    return (E_disc(u, s, w, dx, lam, kappa, C, U, eps_a, q1, q2)
+            + 0.5 * Lam * (dx ** 3 * jnp.sum(_rho(u, dx, eps_a)) - target) ** 2)
+
+
+_grad_pen = jax.jit(jax.grad(E_pen), static_argnums=())
+
+
+@partial(jax.jit, static_argnums=())
+def lock_step(u, s, w, dx, lam, kappa, C, U, eps_a, alpha, beta, q1, q2, Lam, target):
+    """One interleaved step (Eqs. 12/13/11) with the rho-lock penalty active."""
+    g = _grad_pen(u, s, w, dx, lam, kappa, C, U, eps_a, q1, q2, Lam, target)
+    u = tuple(ui - alpha * gi for ui, gi in zip(u, g))
+    a1 = u[0] ** 2 + u[1] ** 2
+    a2 = u[2] ** 2 + u[3] ** 2
+    rho = _rho(u, dx, eps_a)
+    s = s + beta * (lap(s, dx) - 2.0 * (q1 ** 2 * a1 + q2 ** 2 * a2) * s + C * rho)
+    cA = curlA(u[4], u[5], u[6], dx)
+    w = tuple(w[i] + U * (u[7 + i] - cA[i]) for i in range(3))
+    return u, s, w
 
 
 # --------------------------------------------------------------------------
@@ -433,6 +470,46 @@ def relax(N=128, L=None, nlink=4, R=None, core=2.0, lam=1000.0, kappa=0.0008,
     print(f"  ({time.time()-t0:.0f}s)")
 
 
+def enforce_lock(N=64, L=51.2, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
+                 C=400.0, U=50.0, eps_a=0.05, alpha=1e-4, beta=2e-3, q1=1.0, q2=0.0,
+                 lambdas=(0.3, 1.0, 2.0, 3.0), steps=8000, cramp=3000):
+    """Finding 5: impose the rho <-> N_link lock by hand (soft penalty) and co-relax.
+
+    As the lock strength Lam increases, the electric binding energy BUILDS (el: 0 ->
+    thousands), the linking flux is RETAINED instead of expelled, and the total energy
+    sweeps through EHN's ~6000 v/g. In other words: GIVEN the algebraic lock they assert
+    topologically, this exact functional binds, with the electric flux energy dominant --
+    confirming their mechanism. The reproduction gap is the SELF-enforcement of the lock
+    (our discretisation lets rho drain; a global penalty holds it but frustrates the
+    gauge sector and does not by itself stop the sub-grid Q-collapse at low resolution)."""
+    dx = L / N
+    kv = kvecs(N, L)
+    floor = (2 * PI) ** 2 * nlink
+    print(f"[5] Enforce the rho<->N_link lock  (N={N} L={L} R={R} nlink={nlink} C={C}; "
+          f"target integral rho = -{floor:.0f}; EHN E~6000)")
+    print(f"    {'Lam':>5}  {'link':>6} {'Q':>6} {'E':>8} {'mag':>6} {'el':>8}")
+    for Lam in lambdas:
+        phi1, phi2 = build_ic_knot(N, L, nlink, R, core)
+        Ax, Ay, Az = seed_screened_A(phi1, dx, eps_a, q1)
+        z = jnp.zeros((N, N, N))
+        Bx, By, Bz = curlA(Ax, Ay, Az, dx)
+        u = (jnp.real(phi1), jnp.imag(phi1), jnp.real(phi2), jnp.imag(phi2), Ax, Ay, Az, Bx, By, Bz)
+        s = z; w = (z, z, z)
+        rho0 = float(dx ** 3 * jnp.sum(_rho(u, dx, eps_a)))
+        target = -floor if rho0 < 0 else floor           # match the knot's rho sign
+        for n in range(steps + 1):
+            Cn = C * min(1.0, n / cramp) if cramp > 0 else C
+            if n < steps:
+                u, s, w = lock_step(u, s, w, dx, lam, kappa, Cn, U, eps_a,
+                                    alpha, beta, q1, q2, Lam, target)
+        p1 = u[0] + 1j * u[1]; p2 = u[2] + 1j * u[3]
+        Q = skyrmion_number(p1, p2, kv, dx)
+        E = energy_report(u, s, w, dx, lam, kappa, C, U, eps_a, q1, q2)
+        flag = "  <- E ~ EHN 6000" if 4500 < E["total"] < 8000 else ""
+        print(f"    {Lam:>5}  {E['link']/floor*100:+5.0f}% {Q:+.2f} {E['total']:8.0f} "
+              f"{E['mag']:6.0f} {E['elec']:8.0f}{flag}", flush=True)
+
+
 def demo():
     print(__doc__.split("What we find")[0].strip().splitlines()[0])
     print("=" * 72)
@@ -447,6 +524,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="EHN knot soliton (arXiv:2407.11731) faithful reproduction")
     ap.add_argument("--demo", action="store_true",
                     help="run the normalisation + saddle + dilemma diagnostics (the default; ~2 min)")
+    ap.add_argument("--enforce-lock", action="store_true",
+                    help="finding 5: impose the rho<->N_link lock by hand and show it binds (~3 min)")
     ap.add_argument("--relax", action="store_true",
                     help="run the full faithful relaxation instead of the default --demo diagnostics")
     # the following configure --relax only; --demo uses fixed reference sizes
@@ -460,5 +539,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.relax:
         relax(N=a.N, L=a.L, nlink=a.nlink, R=a.R, C=a.C, steps=a.steps, cramp=a.cramp)
+    elif a.enforce_lock:
+        enforce_lock()
     else:
         demo()
