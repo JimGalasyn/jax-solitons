@@ -270,8 +270,9 @@ class VastProvider:
             "order": [["dph_total", "asc"]], "type": "on-demand",
             "limit": 64, "allocated_storage": 5.0,
         }
-        if getattr(spec, "min_gpu_frac", 0.0) > 0:      # dedicated-machine gate (anti-contention)
-            q["gpu_frac"] = {"gte": spec.min_gpu_frac}
+        frac = getattr(spec, "min_gpu_frac", 0.0)       # dedicated-machine gate (anti-contention)
+        if frac > 0:
+            q["gpu_frac"] = {"gte": frac}
         raw = _req("POST", f"{V0}/bundles/", self.key, q).get("offers", [])
         return [
             Offer(id=str(o["id"]), dph=float(o["dph_total"]),

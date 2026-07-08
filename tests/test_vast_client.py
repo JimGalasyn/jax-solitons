@@ -91,6 +91,27 @@ def test_cheapest_offer_filters_by_price(mk):
     assert o.provider == "vast"                  # adapter stamps the offer
 
 
+def test_offers_min_gpu_frac_gate(mk):
+    """min_gpu_frac>0 adds the dedicated-machine gpu_frac gate to the /bundles/
+    query (anti-contention); the default 0.0 omits it (backward-compatible)."""
+    captured = {}
+    base = FakeVast()
+
+    def capture(method, url, key, payload=None, timeout=30, **kw):
+        if method == "POST" and "/bundles/" in url:
+            captured["q"] = payload
+        return base(method, url, key, payload, timeout, **kw)
+
+    prov = mk(capture)
+    base_spec = dict(gpu_name="RTX_3090", max_dph=0.30, min_reliability=0.9,
+                     min_inet_mbps=100, min_cuda=12.0)
+    prov.offers(HostSpec(**base_spec, min_gpu_frac=1.0))
+    assert captured["q"].get("gpu_frac") == {"gte": 1.0}   # gated -> dedicated only
+    captured.clear()
+    prov.offers(HostSpec(**base_spec))                     # default 0.0
+    assert "gpu_frac" not in captured["q"]                 # no gate -> unchanged query
+
+
 def test_rent_happy_path_destroys_and_verifies_gone(mk, tmp_path):
     led = VastLedger(tmp_path / "l.jsonl")
     c = mk(FakeVast(start_status="running"), ledger=led)
