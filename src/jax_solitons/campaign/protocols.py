@@ -236,6 +236,10 @@ class HostSpec:
     min_reliability: float = 0.95
     min_inet_mbps: float = 100.0
     min_cuda: float = 12.0           # >= the LaunchSpec image's CUDA floor
+    min_gpu_frac: float = 0.0        # >0 gates for DEDICATED machines (1.0 = whole box,
+                                     # no GPU-sharing tenants). Guards against the
+                                     # oversubscribed-shared-host thrash (load-36) that
+                                     # silently starves a long run. 0 = no gate (default).
 
 
 @dataclasses.dataclass(frozen=True)
