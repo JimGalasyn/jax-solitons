@@ -121,6 +121,14 @@ def launch_gate(planned: list, launched: list) -> list[str]:
 def verify_shipment(shipment: dict, required_shas: dict) -> list[str]:
     """Product-hash sidecars + worker engine-SHA attestation vs a global tag."""
     v = []
+    # standalone-utility shape guard: typed violations, never a raise
+    if not isinstance(shipment, dict):
+        return ["MALFORMED shipment: not a dict"]
+    for key in ("products", "sidecar", "attested_shas"):
+        if not isinstance(shipment.get(key, {}), dict):
+            v.append(f"MALFORMED {key}: not a dict")
+    if v:
+        return v
     for name, obj in shipment.get("products", {}).items():
         try:
             got = sha256_json(obj)
@@ -242,8 +250,12 @@ class FarmCampaign:
         done = self.registry.register(config).dir / "DONE.json"
         if done.exists():
             return self._govern(rid, json.loads(done.read_text()))
-        self.cf.mark(rid, "completed", True)
-        return {"rid": rid, "status": "SKIP_OK", "reason": "complete, no result"}
+        # a skip signal with NO recoverable DONE.json = the completion marker and
+        # the result diverged (failed artifact sync, cross-registry mismatch, or a
+        # lying injected runner). That is data loss, not success — surface it.
+        reason = "skip signaled but no DONE.json result (possible data loss)"
+        self.cf.mark(rid, "completed", False, reason)
+        return {"rid": rid, "status": "LOST", "reason": reason}
 
     def _govern(self, rid: str, shipment) -> dict:
         """Verify + ingest one shipment over the cut-flow. A malformed shipment

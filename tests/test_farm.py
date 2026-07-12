@@ -125,6 +125,9 @@ def test_execute_fleet_batch_dispatch(tmp_path):
     ingested = []
     camp, shas = _camp(tmp_path, ingest=ingested.append)
     camp.plan(_legs())                                    # 4 valid configs
+    # make leg_1's skip GENUINE: run it once so its result is ingested — a skip
+    # record with no recoverable result is LOST (data loss), not SKIP_OK
+    assert camp.execute_leg(camp.configs[1], _run_fn("good"))["status"] == "REGISTERED"
 
     def dispatch(configs):
         recs = []
@@ -153,7 +156,24 @@ def test_execute_fleet_batch_dispatch(tmp_path):
     assert out["leg_1"]["status"] == "SKIP_OK"
     assert out["leg_2"]["status"] == "REJECTED"
     assert out["leg_3"]["status"] == "REGISTERED"
-    assert [r["rid"] for r in ingested] == ["leg_0", "leg_3"]
+    assert [r["rid"] for r in ingested] == ["leg_1", "leg_0", "leg_3"]
+
+
+def test_skip_without_done_is_lost(tmp_path):
+    """A skip signal with no recoverable DONE.json = data loss -> LOST, and the
+    cut-flow records the drop (never a silent SKIP_OK)."""
+    camp, _ = _camp(tmp_path)
+    camp.plan(_legs())
+    r = camp.execute_leg(camp.configs[0], _run_fn("good"), run=lambda: None)
+    assert r["status"] == "LOST" and "no DONE.json" in r["reason"]
+
+
+def test_verify_shipment_standalone_shape_guard():
+    """Exported verify_shipment self-guards malformed shapes with typed
+    violations instead of raising."""
+    assert "MALFORMED" in verify_shipment({"products": None}, {})[0]
+    assert "MALFORMED" in verify_shipment({"products": {}, "sidecar": None}, {})[0]
+    assert "MALFORMED" in verify_shipment("not-a-dict", {})[0]
 
 
 def test_malformed_shipment_rejected_not_crash(tmp_path):
