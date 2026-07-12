@@ -214,6 +214,7 @@ def test_skip_ok_leaves_no_attrition_in_cutflow(tmp_path):
     the leg fully governed, not silently dropped."""
     camp, _ = _camp(tmp_path)
     camp.plan(_legs())
+    assert camp.gate_launch(camp.configs) == []
     c0 = camp.configs[0]
     assert camp.execute_leg(c0, _run_fn("good"))["status"] == "REGISTERED"
     assert camp.execute_leg(c0, _run_fn("good"))["status"] == "SKIP_OK"
