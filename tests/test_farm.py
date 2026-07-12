@@ -324,8 +324,38 @@ def test_skip_ok_leaves_no_attrition_in_cutflow(tmp_path):
     assert all(v is True for v in camp.cf.rows[rid]), camp.cf.rows[rid]
 
 
-def test_verify_shipment_and_launch_gate_units():
+def test_verify_shipment_and_launch_gate_units(tmp_path):
     assert verify_shipment({"products": {}, "sidecar": {}, "attested_shas": {}}, {}) == []
     v = verify_shipment({"products": {"r": {"x": 1}}, "sidecar": {"r": "nope"},
                          "attested_shas": {}}, {})
     assert v and "HASH_MISMATCH" in v[0]
+    # launch_gate as a standalone export: missing and unplanned both flagged
+    camp, _ = _camp(tmp_path)
+    camp.plan(_legs())
+    cfgs = camp.configs
+    assert launch_gate(cfgs, cfgs) == []
+    assert "MISSING" in launch_gate(cfgs, cfgs[:2])[0]
+    assert "UNPLANNED" in launch_gate(cfgs[:2], cfgs)[0]
+
+
+def test_cutflow_refail_unforces_downstream(tmp_path):
+    """HIGH-PRI: a failed->ok re-mark (e.g. gate_launch re-run after a fix) must
+    un-force the downstream Falses its old drop imposed — otherwise later stages
+    show 0 survivors with no drop reason (silent attrition). A downstream stage
+    with its OWN drop stays dropped, as does everything it forces."""
+    from jax_solitons.campaign import CutFlow
+    cf = CutFlow(["a", "b", "c", "d"])
+    cf.enter("leg")
+    cf.mark("leg", "a", False, "incomplete launch")
+    assert cf.rows["leg"] == [False, False, False, False]
+    cf.mark("leg", "a", True)                     # fixed and re-gated
+    assert cf.rows["leg"] == [True, None, None, None]
+    assert not cf.table()["drops"]
+    # mixed: a genuine downstream drop survives the upstream fix
+    cf2 = CutFlow(["a", "b", "c", "d"])
+    cf2.enter("leg")
+    cf2.mark("leg", "c", False, "genuine c-failure")   # forces d False
+    cf2.mark("leg", "a", False, "incomplete launch")   # forces b,c,d False
+    cf2.mark("leg", "a", True)
+    assert cf2.rows["leg"] == [True, None, False, False]
+    assert {d["stage"] for d in cf2.table()["drops"]} == {"c"}

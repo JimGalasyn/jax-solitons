@@ -75,6 +75,15 @@ class CutFlow:
                 self.rows[leg][j] = False
         else:
             self.reasons.pop((leg, stage), None)
+            # a failed->ok transition un-forces the downstream Falses this
+            # stage's old drop imposed: walk forward, resetting forced Falses
+            # to None (unknown), stopping at the first stage with its OWN
+            # recorded drop — it and everything it forces stay dropped
+            for j in range(i + 1, len(self.stages)):
+                if (leg, self.stages[j]) in self.reasons:
+                    break
+                if self.rows[leg][j] is False:
+                    self.rows[leg][j] = None
 
     def table(self) -> dict:
         counts = [{"stage": s, "survivors": sum(1 for r in self.rows.values() if r[i])}
