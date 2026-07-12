@@ -118,6 +118,43 @@ def test_injected_executor_seam_d(tmp_path):
     assert r["status"] == "REGISTERED"
 
 
+def test_execute_fleet_batch_dispatch(tmp_path):
+    """Batch seam D: a mock dispatch (ProviderExecutor.run contract) returns a
+    good leg, a tampered leg, and a skipped leg; execute_fleet governs each."""
+    ingested = []
+    camp, shas = _camp(tmp_path, ingest=ingested.append)
+    camp.plan(_legs())                                    # 4 valid configs
+
+    def dispatch(configs):
+        recs = []
+        for i, c in enumerate(configs):
+            rid = c.params["rid"]
+            rec = _record(rid)
+            if i == 1:                                    # skipped (worker idempotent skip)
+                recs.append({"run": c.run_name(), "result": None, "skipped": True})
+            elif i == 2:                                  # tampered product
+                bad = {**rec, "e": 9.99}
+                recs.append({"run": c.run_name(),
+                             "result": {"products": {"record": bad},
+                                        "sidecar": {"record": sha256_json(rec)},
+                                        "attested_shas": dict(shas)},
+                             "skipped": False})
+            else:
+                recs.append({"run": c.run_name(),
+                             "result": {"products": {"record": rec},
+                                        "sidecar": {"record": sha256_json(rec)},
+                                        "attested_shas": dict(shas)},
+                             "skipped": False})
+        return recs
+
+    out = camp.execute_fleet(dispatch)
+    assert out["leg_0"]["status"] == "REGISTERED"
+    assert out["leg_1"]["status"] == "SKIP_OK"
+    assert out["leg_2"]["status"] == "REJECTED"
+    assert out["leg_3"]["status"] == "REGISTERED"
+    assert [r["rid"] for r in ingested] == ["leg_0", "leg_3"]
+
+
 def test_verify_shipment_and_launch_gate_units():
     assert verify_shipment({"products": {}, "sidecar": {}, "attested_shas": {}}, {}) == []
     v = verify_shipment({"products": {"r": {"x": 1}}, "sidecar": {"r": "nope"},

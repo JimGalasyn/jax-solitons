@@ -195,6 +195,34 @@ class FarmCampaign:
             return {"rid": rid, "status": "REJECTED", "violations": v}
         return self._ingest(rid, shipment)
 
+    def execute_fleet(self, dispatch) -> dict:
+        """Batch seam D: dispatch ALL planned+gated configs through an injected
+        executor and govern each result (verify + ingest over the cut-flow).
+
+        `dispatch(configs) -> [{"run", "result", "skipped"}, ...]` is the
+        ProviderExecutor.run / remote run_one contract: `result` is the RunFn's
+        shipment (or None when the worker's idempotent skip fired). Returns
+        {rid: status}. This is the parallel path VU-1 Phase C dispatches on."""
+        by_name = {c.run_name(): c for c in self.configs}
+        out = {}
+        for rec in dispatch(self.configs):
+            c = by_name.get(rec.get("run"))
+            rid = c.params["rid"] if c else rec.get("run", "?")
+            shipment = rec.get("result")
+            if shipment is None:                          # idempotent skip / host lost
+                skipped = bool(rec.get("skipped"))
+                self.cf.mark(rid, "completed", skipped,
+                             "" if skipped else "no result (host lost)")
+                out[rid] = {"rid": rid, "status": "SKIP_OK" if skipped else "LOST"}
+                continue
+            self.cf.mark(rid, "completed", True)
+            self.cf.mark(rid, "shipped", True)
+            v = verify_shipment(shipment, self.required_shas)
+            self.cf.mark(rid, "verified", not v, "; ".join(v))
+            out[rid] = ({"rid": rid, "status": "REJECTED", "violations": v}
+                        if v else self._ingest(rid, shipment))
+        return out
+
     def _ingest(self, rid: str, shipment: dict) -> dict:
         content = sha256_json(shipment["products"])
         if rid in self.ingested:
