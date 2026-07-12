@@ -125,6 +125,7 @@ def test_execute_fleet_batch_dispatch(tmp_path):
     ingested = []
     camp, shas = _camp(tmp_path, ingest=ingested.append)
     camp.plan(_legs())                                    # 4 valid configs
+    assert camp.gate_launch(camp.configs) == []           # execute_fleet enforces this
     # make leg_1's skip GENUINE: run it once so its result is ingested — a skip
     # record with no recoverable result is LOST (data loss), not SKIP_OK
     assert camp.execute_leg(camp.configs[1], _run_fn("good"))["status"] == "REGISTERED"
@@ -166,6 +167,31 @@ def test_skip_without_done_is_lost(tmp_path):
     camp.plan(_legs())
     r = camp.execute_leg(camp.configs[0], _run_fn("good"), run=lambda: None)
     assert r["status"] == "LOST" and "no DONE.json" in r["reason"]
+
+
+def test_leg_cannot_spoof_campaign_identity(tmp_path):
+    """A leg carrying gtag/required_shas keys must NOT override the campaign's —
+    the attestation identity is campaign-authoritative."""
+    from jax_solitons.campaign import leg_to_config
+    leg = {"rid": "spoof", "cfg": {"L": 40.0, "dx": 0.8},
+           "gtag": "EVIL", "required_shas": {"engine": "spoofed"}}
+    c = leg_to_config(leg, "REAL-TAG", {"engine": "aaaa111"})
+    assert c.params["gtag"] == "REAL-TAG"
+    assert c.params["required_shas"] == {"engine": "aaaa111"}
+
+
+def test_execute_fleet_requires_passing_gate(tmp_path):
+    """execute_fleet refuses to dispatch before a passing gate_launch; a
+    re-plan resets the gate."""
+    camp, _ = _camp(tmp_path)
+    camp.plan(_legs())
+    with pytest.raises(RuntimeError, match="gate_launch"):
+        camp.execute_fleet(lambda configs: [])
+    assert camp.gate_launch(camp.configs) == []
+    camp.execute_fleet(lambda configs: [])                 # gated: dispatches fine
+    camp.plan(_legs())                                     # re-plan resets the gate
+    with pytest.raises(RuntimeError, match="gate_launch"):
+        camp.execute_fleet(lambda configs: [])
 
 
 def test_verify_shipment_standalone_shape_guard():

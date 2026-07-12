@@ -94,14 +94,18 @@ def leg_to_config(leg: dict, gtag: str, required_shas: dict) -> RunConfig:
     which replaces any hand-rolled spec hash. `leg` carries at least
     {rid, cfg:{L, dx, ...}}; everything else rides in `params` verbatim."""
     cfg = leg["cfg"]
+    # campaign-authoritative keys are UNSPOOFABLE: a leg carrying gtag /
+    # required_shas must not silently override the campaign's attestation
+    # identity, so those are excluded from the passthrough (and re-set last)
+    reserved = ("rid", "cfg", "plan", "N", "seed", "model",
+                "gtag", "required_shas")
     return RunConfig(
         model=leg.get("model", "farm"),
         N=int(leg.get("N", round(cfg["L"] / cfg["dx"]))),
         L=float(cfg["L"]), seed=int(leg.get("seed", 0)),
         params={"rid": leg["rid"], "cfg": cfg, "plan": leg.get("plan", []),
-                "gtag": gtag, "required_shas": required_shas,
-                **{k: leg[k] for k in leg
-                   if k not in ("rid", "cfg", "plan", "N", "seed", "model")}})
+                **{k: leg[k] for k in leg if k not in reserved},
+                "gtag": gtag, "required_shas": required_shas})
 
 
 def launch_gate(planned: list, launched: list) -> list[str]:
@@ -175,8 +179,10 @@ class FarmCampaign:
         self.cf = CutFlow(FLEET_STAGES)
         self.configs: list = []
         self.ingested: dict = {}                         # rid -> content hash
+        self._gated = False                              # gate_launch passed?
 
     def plan(self, legs: list[dict]) -> dict:
+        self._gated = False                              # a new plan must re-gate
         ok = []
         for leg in legs:
             self.cf.enter(leg["rid"])
@@ -192,6 +198,7 @@ class FarmCampaign:
         v = launch_gate(self.configs, launched)
         for c in self.configs:
             self.cf.mark(c.params["rid"], "launch-gate", not v, "; ".join(v) if v else "")
+        self._gated = not v
         return v
 
     def execute_leg(self, config: RunConfig, run_fn, *, run=None) -> dict:
@@ -218,7 +225,14 @@ class FarmCampaign:
         shipment (or None when the worker's idempotent skip fired — then the
         DONE.json result is recovered and ingested, same as execute_leg, so the
         batch path never leaves the corpus short). Returns {rid: result-dict}
-        (each value the same status dict execute_leg/_govern return)."""
+        (each value the same status dict execute_leg/_govern return).
+
+        Launch-completeness is ENFORCED: raises RuntimeError unless a passing
+        gate_launch() ran against the current plan (re-plan resets the gate)."""
+        if not self._gated:
+            raise RuntimeError(
+                "execute_fleet before a passing gate_launch(): call plan(...) "
+                "then gate_launch(configs) and resolve violations first")
         by_name = {c.run_name(): c for c in self.configs}
         out = {}
         for rec in dispatch(self.configs):
@@ -231,8 +245,9 @@ class FarmCampaign:
                 if c is not None and bool(rec.get("skipped")):
                     out[rid] = self._on_skip(rid, c)      # recover DONE.json + ingest
                 else:
-                    self.cf.mark(rid, "completed", False, "no result (host lost)")
-                    out[rid] = {"rid": rid, "status": "LOST"}
+                    reason = "no result (host lost)"
+                    self.cf.mark(rid, "completed", False, reason)
+                    out[rid] = {"rid": rid, "status": "LOST", "reason": reason}
                 continue
             out[rid] = self._govern(rid, shipment)
         return out
