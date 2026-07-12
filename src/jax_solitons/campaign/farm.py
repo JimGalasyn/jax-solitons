@@ -234,7 +234,10 @@ class FarmCampaign:
         recover the finished DONE.json result and govern it, so a skip still lands
         in the corpus and the cut-flow is never left silently unmarked."""
         if rid in self.ingested:
-            self.cf.mark(rid, "completed", True)
+            # fully governed on its first pass — re-affirm every stage so a
+            # terminal SKIP_OK never reads as silent attrition in the waterfall
+            for s in ("completed", "shipped", "verified", "registered"):
+                self.cf.mark(rid, s, True)
             return {"rid": rid, "status": "SKIP_OK", "reason": "already complete"}
         done = self.registry.register(config).dir / "DONE.json"
         if done.exists():
@@ -247,10 +250,15 @@ class FarmCampaign:
         (not a dict, or missing `products`) is REJECTED with a typed violation at
         this policy boundary, never a KeyError."""
         self.cf.mark(rid, "completed", True)
-        if not isinstance(shipment, dict) or "products" not in shipment:
-            self.cf.mark(rid, "shipped", False, "malformed shipment (no products)")
-            return {"rid": rid, "status": "REJECTED",
-                    "violations": ["malformed shipment (no products)"]}
+        bad = None
+        if not isinstance(shipment, dict) or not isinstance(shipment.get("products"), dict):
+            bad = "malformed shipment (products missing or not a dict)"
+        elif not isinstance(shipment.get("sidecar", {}), dict) or \
+                not isinstance(shipment.get("attested_shas", {}), dict):
+            bad = "malformed shipment (sidecar/attested_shas not dicts)"
+        if bad:
+            self.cf.mark(rid, "shipped", False, bad)
+            return {"rid": rid, "status": "REJECTED", "violations": [bad]}
         self.cf.mark(rid, "shipped", True)
         v = verify_shipment(shipment, self.required_shas)
         self.cf.mark(rid, "verified", not v, "; ".join(v))
@@ -267,6 +275,7 @@ class FarmCampaign:
                     "violations": [f"unhashable products: {e}"]}
         if rid in self.ingested:
             if self.ingested[rid] == content:
+                self.cf.mark(rid, "registered", True)   # terminal, not attrition
                 return {"rid": rid, "status": "SKIP_OK",
                         "reason": "already in corpus, identical content"}
             # the original rid stays REGISTERED (its first, accepted content); the

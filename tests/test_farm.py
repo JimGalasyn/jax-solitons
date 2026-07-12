@@ -194,6 +194,33 @@ def test_unhashable_product_rejected_not_crash(tmp_path):
     assert r["status"] == "REJECTED" and "UNHASHABLE" in r["violations"][0]
 
 
+def test_none_products_rejected_not_crash(tmp_path):
+    """{'products': None} (or sidecar None) is a typed REJECT, not a NoneType crash."""
+    camp, shas = _camp(tmp_path)
+    camp.plan(_legs())
+    r = camp.execute_leg(camp.configs[0],
+                         lambda config, ctx: {"products": None, "sidecar": {},
+                                              "attested_shas": dict(shas)})
+    assert r["status"] == "REJECTED" and "malformed" in r["violations"][0]
+    r = camp.execute_leg(camp.configs[1],
+                         lambda config, ctx: {"products": {"record": {"x": 1}},
+                                              "sidecar": None,
+                                              "attested_shas": dict(shas)})
+    assert r["status"] == "REJECTED" and "malformed" in r["violations"][0]
+
+
+def test_skip_ok_leaves_no_attrition_in_cutflow(tmp_path):
+    """A terminal SKIP_OK re-execution marks every stage — the waterfall shows
+    the leg fully governed, not silently dropped."""
+    camp, _ = _camp(tmp_path)
+    camp.plan(_legs())
+    c0 = camp.configs[0]
+    assert camp.execute_leg(c0, _run_fn("good"))["status"] == "REGISTERED"
+    assert camp.execute_leg(c0, _run_fn("good"))["status"] == "SKIP_OK"
+    rid = c0.params["rid"]
+    assert all(v is True for v in camp.cf.rows[rid]), camp.cf.rows[rid]
+
+
 def test_verify_shipment_and_launch_gate_units():
     assert verify_shipment({"products": {}, "sidecar": {}, "attested_shas": {}}, {}) == []
     v = verify_shipment({"products": {"r": {"x": 1}}, "sidecar": {"r": "nope"},
