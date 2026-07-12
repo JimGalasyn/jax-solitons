@@ -1,11 +1,11 @@
-"""Tests for jax_solitons.topology.colored_jones (Rosso-Jones cabled states)."""
+"""Tests for jax_solitons.invariants.colored_jones (Rosso-Jones cabled states)."""
 
 import cmath
 import math
 
 import pytest
 
-from jax_solitons.topology.colored_jones import (
+from jax_solitons.invariants.colored_jones import (
     quantum_integer,
     torus_channels,
     cabling_space_dimension,

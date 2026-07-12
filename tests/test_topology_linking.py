@@ -1,4 +1,4 @@
-"""Tests for jax_solitons.topology.linking_invariants.
+"""Tests for jax_solitons.invariants.linking_invariants.
 
 Covers the Gauss linking number and pairwise matrix, the Borromean reference
 rings and the Borromean-vs-anti-Borromean deletion test, the Milnor
@@ -11,8 +11,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jax_solitons.topology.curves import torus_knot_curve, hopf_link_curves
-from jax_solitons.topology import (
+from jax_solitons.invariants.curves import torus_knot_curve, hopf_link_curves
+from jax_solitons.invariants import (
     gauss_linking_number,
     linking_matrix,
     link_deletion_test,
