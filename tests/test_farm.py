@@ -155,6 +155,30 @@ def test_execute_fleet_batch_dispatch(tmp_path):
     assert [r["rid"] for r in ingested] == ["leg_0", "leg_3"]
 
 
+def test_malformed_shipment_rejected_not_crash(tmp_path):
+    """A RunFn returning a shipment with no `products` is REJECTED at the policy
+    boundary with a typed violation, never a KeyError."""
+    camp, _ = _camp(tmp_path)
+    camp.plan(_legs())
+
+    def bad_run_fn(config, ctx):
+        return {"sidecar": {}, "attested_shas": {}}       # missing "products"
+    r = camp.execute_leg(camp.configs[0], bad_run_fn)
+    assert r["status"] == "REJECTED" and "malformed" in r["violations"][0]
+
+
+def test_execute_leg_unplanned_config_no_keyerror(tmp_path):
+    """execute_leg on a config that wasn't plan()-entered auto-enters it in the
+    cut-flow rather than KeyError-ing."""
+    camp, shas = _camp(tmp_path)
+    camp.plan(_legs())
+    unplanned = camp.configs[0]
+    camp.cf.rows.clear()                                   # simulate 'never planned'
+    r = camp.execute_leg(unplanned, _run_fn("good"))
+    assert r["status"] == "REGISTERED"
+    assert unplanned.params["rid"] in camp.cf.rows
+
+
 def test_verify_shipment_and_launch_gate_units():
     assert verify_shipment({"products": {}, "sidecar": {}, "attested_shas": {}}, {}) == []
     v = verify_shipment({"products": {"r": {"x": 1}}, "sidecar": {"r": "nope"},

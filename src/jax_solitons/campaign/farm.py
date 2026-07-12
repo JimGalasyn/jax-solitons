@@ -41,7 +41,11 @@ FLEET_STAGES = ["planned", "launch-gate", "completed", "shipped",
 
 
 def sha256_json(obj) -> str:
-    return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()
+    """Canonical content hash: sorted keys, no whitespace, explicit UTF-8, and
+    NaN/Inf rejected — so a sidecar hash compares byte-stably across hosts."""
+    return hashlib.sha256(json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ensure_ascii=True).encode("utf-8")).hexdigest()
 
 
 class CutFlow:
@@ -51,6 +55,7 @@ class CutFlow:
 
     def __init__(self, stages: list[str]):
         self.stages = stages
+        self._idx = {s: i for i, s in enumerate(stages)}   # O(1) mark()
         self.rows: dict[str, list] = {}
         self.reasons: dict[tuple, str] = {}
 
@@ -58,7 +63,9 @@ class CutFlow:
         self.rows[leg] = [None] * len(self.stages)
 
     def mark(self, leg: str, stage: str, ok: bool, reason: str = ""):
-        i = self.stages.index(stage)
+        if leg not in self.rows:            # defensive: an unplanned/unknown leg
+            self.enter(leg)                 # is entered rather than KeyError-ing
+        i = self._idx[stage]
         self.rows[leg][i] = ok
         if not ok:
             self.reasons[(leg, stage)] = reason or "unspecified"
@@ -135,9 +142,12 @@ class FarmCampaign:
       ingest(record)         -> None          (corpus persistence; default in-mem)
 
     The executor is campaign seam D: `execute_leg` runs the run_fn in-process
-    (execute_config) by default; pass `run=` to dispatch through an Executor /
-    ProviderExecutor / FleetExecutor instead. All mechanism guarantees (A idempotent
-    skip, B restart-after-death, C flushed events) are inherited unchanged."""
+    (execute_config) by default; pass `run=` — a ZERO-ARG thunk returning one
+    shipment dict (or None on idempotent skip) — to dispatch elsewhere (the caller
+    adapts an Executor/ProviderExecutor.run into such a thunk). `execute_fleet` is
+    the batch form that consumes the ProviderExecutor.run record list directly. All
+    mechanism guarantees (A idempotent skip, B restart-after-death, C flushed
+    events) are inherited unchanged."""
 
     def __init__(self, gtag: str, required_shas: dict, work_dir: str, *,
                  preflight: Callable[[dict], list] | None = None,
@@ -173,6 +183,8 @@ class FarmCampaign:
 
     def execute_leg(self, config: RunConfig, run_fn, *, run=None) -> dict:
         rid = config.params["rid"]
+        if rid not in self.cf.rows:                       # allow an unplanned config
+            self.cf.enter(rid)
         runner = run or (lambda: execute_config(
             config, run_fn, registry=self.registry, sink=self.sink))
         try:
@@ -181,19 +193,8 @@ class FarmCampaign:
             self.cf.mark(rid, "completed", False, f"HOST_LOST: {e}")
             return {"rid": rid, "status": "LOST", "reason": str(e)}
         if shipment is None:                              # idempotent skip (A)
-            if rid in self.ingested:
-                return {"rid": rid, "status": "SKIP_OK", "reason": "already complete"}
-            done = self.registry.register(config).dir / "DONE.json"
-            shipment = json.loads(done.read_text()) if done.exists() else None
-            if shipment is None:
-                return {"rid": rid, "status": "SKIP_OK", "reason": "complete, no result"}
-        self.cf.mark(rid, "completed", True)
-        self.cf.mark(rid, "shipped", True)
-        v = verify_shipment(shipment, self.required_shas)
-        self.cf.mark(rid, "verified", not v, "; ".join(v))
-        if v:
-            return {"rid": rid, "status": "REJECTED", "violations": v}
-        return self._ingest(rid, shipment)
+            return self._on_skip(rid, config)
+        return self._govern(rid, shipment)
 
     def execute_fleet(self, dispatch) -> dict:
         """Batch seam D: dispatch ALL planned+gated configs through an injected
@@ -201,27 +202,55 @@ class FarmCampaign:
 
         `dispatch(configs) -> [{"run", "result", "skipped"}, ...]` is the
         ProviderExecutor.run / remote run_one contract: `result` is the RunFn's
-        shipment (or None when the worker's idempotent skip fired). Returns
-        {rid: status}. This is the parallel path VU-1 Phase C dispatches on."""
+        shipment (or None when the worker's idempotent skip fired — then the
+        DONE.json result is recovered and ingested, same as execute_leg, so the
+        batch path never leaves the corpus short). Returns {rid: status}."""
         by_name = {c.run_name(): c for c in self.configs}
         out = {}
         for rec in dispatch(self.configs):
             c = by_name.get(rec.get("run"))
             rid = c.params["rid"] if c else rec.get("run", "?")
+            if rid not in self.cf.rows:                   # unknown/unplanned run name
+                self.cf.enter(rid)
             shipment = rec.get("result")
             if shipment is None:                          # idempotent skip / host lost
-                skipped = bool(rec.get("skipped"))
-                self.cf.mark(rid, "completed", skipped,
-                             "" if skipped else "no result (host lost)")
-                out[rid] = {"rid": rid, "status": "SKIP_OK" if skipped else "LOST"}
+                if c is not None and bool(rec.get("skipped")):
+                    out[rid] = self._on_skip(rid, c)      # recover DONE.json + ingest
+                else:
+                    self.cf.mark(rid, "completed", False, "no result (host lost)")
+                    out[rid] = {"rid": rid, "status": "LOST"}
                 continue
-            self.cf.mark(rid, "completed", True)
-            self.cf.mark(rid, "shipped", True)
-            v = verify_shipment(shipment, self.required_shas)
-            self.cf.mark(rid, "verified", not v, "; ".join(v))
-            out[rid] = ({"rid": rid, "status": "REJECTED", "violations": v}
-                        if v else self._ingest(rid, shipment))
+            out[rid] = self._govern(rid, shipment)
         return out
+
+    def _on_skip(self, rid: str, config: RunConfig) -> dict:
+        """Mechanism A idempotent skip: already-ingested -> SKIP_OK; otherwise
+        recover the finished DONE.json result and govern it, so a skip still lands
+        in the corpus and the cut-flow is never left silently unmarked."""
+        if rid in self.ingested:
+            self.cf.mark(rid, "completed", True)
+            return {"rid": rid, "status": "SKIP_OK", "reason": "already complete"}
+        done = self.registry.register(config).dir / "DONE.json"
+        if done.exists():
+            return self._govern(rid, json.loads(done.read_text()))
+        self.cf.mark(rid, "completed", True)
+        return {"rid": rid, "status": "SKIP_OK", "reason": "complete, no result"}
+
+    def _govern(self, rid: str, shipment) -> dict:
+        """Verify + ingest one shipment over the cut-flow. A malformed shipment
+        (not a dict, or missing `products`) is REJECTED with a typed violation at
+        this policy boundary, never a KeyError."""
+        self.cf.mark(rid, "completed", True)
+        if not isinstance(shipment, dict) or "products" not in shipment:
+            self.cf.mark(rid, "shipped", False, "malformed shipment (no products)")
+            return {"rid": rid, "status": "REJECTED",
+                    "violations": ["malformed shipment (no products)"]}
+        self.cf.mark(rid, "shipped", True)
+        v = verify_shipment(shipment, self.required_shas)
+        self.cf.mark(rid, "verified", not v, "; ".join(v))
+        if v:
+            return {"rid": rid, "status": "REJECTED", "violations": v}
+        return self._ingest(rid, shipment)
 
     def _ingest(self, rid: str, shipment: dict) -> dict:
         content = sha256_json(shipment["products"])
@@ -229,6 +258,9 @@ class FarmCampaign:
             if self.ingested[rid] == content:
                 return {"rid": rid, "status": "SKIP_OK",
                         "reason": "already in corpus, identical content"}
+            # the original rid stays REGISTERED (its first, accepted content); the
+            # rejected re-attempt is a distinct .conflict leg so neither is silent
+            self.cf.mark(rid, "registered", True)
             self.cf.enter(rid + ".conflict")
             for s in FLEET_STAGES[:-1]:
                 self.cf.mark(rid + ".conflict", s, True)
