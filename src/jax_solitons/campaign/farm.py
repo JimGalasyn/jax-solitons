@@ -122,7 +122,12 @@ def verify_shipment(shipment: dict, required_shas: dict) -> list[str]:
     """Product-hash sidecars + worker engine-SHA attestation vs a global tag."""
     v = []
     for name, obj in shipment.get("products", {}).items():
-        want, got = shipment.get("sidecar", {}).get(name), sha256_json(obj)
+        try:
+            got = sha256_json(obj)
+        except (ValueError, TypeError) as e:     # unhashable product (NaN, non-str keys)
+            v.append(f"UNHASHABLE {name}: {e}")
+            continue
+        want = shipment.get("sidecar", {}).get(name)
         if want != got:
             v.append(f"HASH_MISMATCH {name}: sidecar {str(want)[:12]} != shipped {got[:12]}")
     for slot, sha in required_shas.items():
@@ -204,7 +209,8 @@ class FarmCampaign:
         ProviderExecutor.run / remote run_one contract: `result` is the RunFn's
         shipment (or None when the worker's idempotent skip fired — then the
         DONE.json result is recovered and ingested, same as execute_leg, so the
-        batch path never leaves the corpus short). Returns {rid: status}."""
+        batch path never leaves the corpus short). Returns {rid: result-dict}
+        (each value the same status dict execute_leg/_govern return)."""
         by_name = {c.run_name(): c for c in self.configs}
         out = {}
         for rec in dispatch(self.configs):
@@ -253,7 +259,12 @@ class FarmCampaign:
         return self._ingest(rid, shipment)
 
     def _ingest(self, rid: str, shipment: dict) -> dict:
-        content = sha256_json(shipment["products"])
+        try:
+            content = sha256_json(shipment["products"])
+        except (ValueError, TypeError) as e:     # unhashable products -> typed reject
+            self.cf.mark(rid, "registered", False, f"unhashable products: {e}")
+            return {"rid": rid, "status": "REJECTED",
+                    "violations": [f"unhashable products: {e}"]}
         if rid in self.ingested:
             if self.ingested[rid] == content:
                 return {"rid": rid, "status": "SKIP_OK",

@@ -98,7 +98,8 @@ def test_shipment_hash_and_sha_attestation_reject(tmp_path):
 
 
 def test_conflict_never_overwritten(tmp_path):
-    camp, shas = _camp(tmp_path, ingest=[].append)
+    ingested = []
+    camp, shas = _camp(tmp_path, ingest=ingested.append)
     camp.plan(_legs())
     camp.execute_leg(camp.configs[0], _run_fn("good"))
     r = camp._ingest("leg_0", {"products": {"record": _record("leg_0", e=9.99)},
@@ -177,6 +178,20 @@ def test_execute_leg_unplanned_config_no_keyerror(tmp_path):
     r = camp.execute_leg(unplanned, _run_fn("good"))
     assert r["status"] == "REGISTERED"
     assert unplanned.params["rid"] in camp.cf.rows
+
+
+def test_unhashable_product_rejected_not_crash(tmp_path):
+    """A product carrying NaN (rejected by the canonical hash's allow_nan=False)
+    is REJECTED at the boundary, not raised through execute_leg."""
+    camp, shas = _camp(tmp_path)
+    camp.plan(_legs())
+
+    def nan_run_fn(config, ctx):
+        rec = {"rid": config.params["rid"], "e": float("nan")}
+        return {"products": {"record": rec}, "sidecar": {},
+                "attested_shas": dict(shas)}
+    r = camp.execute_leg(camp.configs[0], nan_run_fn)
+    assert r["status"] == "REJECTED" and "UNHASHABLE" in r["violations"][0]
 
 
 def test_verify_shipment_and_launch_gate_units():
