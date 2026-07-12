@@ -194,6 +194,62 @@ def test_execute_fleet_requires_passing_gate(tmp_path):
         camp.execute_fleet(lambda configs: [])
 
 
+def test_required_shas_not_aliased(tmp_path):
+    """Mutating the caller's dict or a config's params must not move the
+    campaign's verification baseline (attestation identity is stable)."""
+    from jax_solitons.campaign import leg_to_config
+    caller = {"engine": "aaaa111"}
+    camp = FarmCampaign("TAG", caller, str(tmp_path), preflight=_preflight)
+    caller["engine"] = "mutated-by-caller"
+    assert camp.required_shas == {"engine": "aaaa111"}
+    c = leg_to_config({"rid": "x", "cfg": {"L": 40.0, "dx": 0.8}},
+                      "TAG", camp.required_shas)
+    c.params["required_shas"]["engine"] = "mutated-via-config"
+    assert camp.required_shas == {"engine": "aaaa111"}
+
+
+def test_cutflow_reenter_clears_stale_reasons(tmp_path):
+    """Re-entering a leg (re-plan) clears its old drop reasons — no stale drops
+    reported for a reset row."""
+    from jax_solitons.campaign import CutFlow
+    cf = CutFlow(["a", "b"])
+    cf.enter("leg"); cf.mark("leg", "a", False, "old failure")
+    cf.enter("leg")
+    assert not cf.table()["drops"]
+
+
+def test_execute_fleet_reconciles_dispatch(tmp_path):
+    """A dispatch that drops a leg, duplicates one, or invents an unplanned run
+    name is reconciled: missing -> LOST, duplicate -> first kept + typed drop,
+    unknown -> REJECTED (never governed/ingested)."""
+    ingested = []
+    camp, shas = _camp(tmp_path, ingest=ingested.append)
+    camp.plan(_legs())
+    assert camp.gate_launch(camp.configs) == []
+
+    def dispatch(configs):
+        good = lambda c: {"run": c.run_name(),
+                          "result": {"products": {"record": _record(c.params["rid"])},
+                                     "sidecar": {"record": sha256_json(_record(c.params["rid"]))},
+                                     "attested_shas": dict(shas)},
+                          "skipped": False}
+        recs = [good(configs[0]), good(configs[0])]        # duplicate leg_0
+        recs.append({"run": "ghost_run", "result": {"products": {"record": {"x": 1}}},
+                     "skipped": False})                    # unplanned name
+        recs.append(good(configs[1]))
+        return recs                                        # legs 2,3 dropped
+
+    out = camp.execute_fleet(dispatch)
+    assert out["leg_0"]["status"] == "REGISTERED"
+    assert out["leg_1"]["status"] == "REGISTERED"
+    assert out["ghost_run"]["status"] == "REJECTED"
+    assert out["leg_2"]["status"] == "LOST" and "no record" in out["leg_2"]["reason"]
+    assert out["leg_3"]["status"] == "LOST"
+    assert [r["rid"] for r in ingested] == ["leg_0", "leg_1"]   # ghost never ingested
+    drops = {d["leg"]: d["reason"] for d in camp.cf.table()["drops"]}
+    assert "leg_0.dup" in drops and "duplicate" in drops["leg_0.dup"]
+
+
 def test_verify_shipment_standalone_shape_guard():
     """Exported verify_shipment self-guards malformed shapes with typed
     violations instead of raising."""

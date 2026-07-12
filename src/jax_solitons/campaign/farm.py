@@ -61,6 +61,8 @@ class CutFlow:
 
     def enter(self, leg: str):
         self.rows[leg] = [None] * len(self.stages)
+        for key in [k for k in self.reasons if k[0] == leg]:
+            del self.reasons[key]           # a re-entered leg starts clean
 
     def mark(self, leg: str, stage: str, ok: bool, reason: str = ""):
         if leg not in self.rows:            # defensive: an unplanned/unknown leg
@@ -105,7 +107,9 @@ def leg_to_config(leg: dict, gtag: str, required_shas: dict) -> RunConfig:
         L=float(cfg["L"]), seed=int(leg.get("seed", 0)),
         params={"rid": leg["rid"], "cfg": cfg, "plan": leg.get("plan", []),
                 **{k: leg[k] for k in leg if k not in reserved},
-                "gtag": gtag, "required_shas": required_shas})
+                # per-leg COPY: mutating one config's required_shas must not
+                # alias into other legs or the campaign's verification baseline
+                "gtag": gtag, "required_shas": dict(required_shas)})
 
 
 def launch_gate(planned: list, launched: list) -> list[str]:
@@ -170,7 +174,9 @@ class FarmCampaign:
                  preflight: Callable[[dict], list] | None = None,
                  stage_validate: Callable[[list, dict], list] | None = None,
                  ingest: Callable[[dict], None] | None = None):
-        self.gtag, self.required_shas = gtag, required_shas
+        # own a copy: the verification baseline must not be mutable through the
+        # caller's dict (or through any config.params aliasing it)
+        self.gtag, self.required_shas = gtag, dict(required_shas)
         self.registry = FileRunRegistry(work_dir)        # mechanism A/B
         self.sink = JsonlEventSink()                     # mechanism C
         self.preflight = preflight or (lambda cfg: [])
@@ -237,12 +243,25 @@ class FarmCampaign:
         out = {}
         for rec in dispatch(self.configs):
             c = by_name.get(rec.get("run"))
-            rid = c.params["rid"] if c else rec.get("run", "?")
-            if rid not in self.cf.rows:                   # unknown/unplanned run name
+            if c is None:                                 # unplanned run name: a
+                rid = str(rec.get("run", "?"))            # protocol violation, never
+                self.cf.enter(rid)                        # governed/ingested
+                reason = "unplanned run name from dispatch (protocol violation)"
+                self.cf.mark(rid, "completed", False, reason)
+                out[rid] = {"rid": rid, "status": "REJECTED", "violations": [reason]}
+                continue
+            rid = c.params["rid"]
+            if rid in out:                                # duplicate record: keep the
+                dup = f"{rid}.dup"                        # first, type the repeat
+                self.cf.enter(dup)
+                self.cf.mark(dup, "completed", False,
+                             "duplicate dispatch record (protocol violation)")
+                continue
+            if rid not in self.cf.rows:
                 self.cf.enter(rid)
             shipment = rec.get("result")
             if shipment is None:                          # idempotent skip / host lost
-                if c is not None and bool(rec.get("skipped")):
+                if bool(rec.get("skipped")):
                     out[rid] = self._on_skip(rid, c)      # recover DONE.json + ingest
                 else:
                     reason = "no result (host lost)"
@@ -250,6 +269,13 @@ class FarmCampaign:
                     out[rid] = {"rid": rid, "status": "LOST", "reason": reason}
                 continue
             out[rid] = self._govern(rid, shipment)
+        # reconcile: a planned config the dispatch never reported = data loss
+        for c in self.configs:
+            rid = c.params["rid"]
+            if rid not in out:
+                reason = "dispatch returned no record for this leg (dropped?)"
+                self.cf.mark(rid, "completed", False, reason)
+                out[rid] = {"rid": rid, "status": "LOST", "reason": reason}
         return out
 
     def _on_skip(self, rid: str, config: RunConfig) -> dict:
