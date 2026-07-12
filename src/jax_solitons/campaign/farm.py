@@ -104,7 +104,11 @@ def leg_to_config(leg: dict, gtag: str, required_shas: dict) -> RunConfig:
     """A farm leg -> a campaign RunConfig. Identity = config_hash (mechanism A),
     which replaces any hand-rolled spec hash. `leg` carries at least
     {rid, cfg:{L, dx, ...}}; everything else rides in `params` verbatim."""
-    cfg = leg["cfg"]
+    # cfg/plan are COPIED: RunConfig.config_hash() serializes params, so a
+    # caller mutating the original leg dicts after plan() would silently change
+    # the config's identity (run_name / registry dir / gate matching) and, when
+    # legs share one cfg object, cross-contaminate each other
+    cfg = dict(leg["cfg"])
     # campaign-authoritative keys are UNSPOOFABLE: a leg carrying gtag /
     # required_shas must not silently override the campaign's attestation
     # identity, so those are excluded from the passthrough (and re-set last)
@@ -114,7 +118,7 @@ def leg_to_config(leg: dict, gtag: str, required_shas: dict) -> RunConfig:
         model=leg.get("model", "farm"),
         N=int(leg.get("N", round(cfg["L"] / cfg["dx"]))),
         L=float(cfg["L"]), seed=int(leg.get("seed", 0)),
-        params={"rid": leg["rid"], "cfg": cfg, "plan": leg.get("plan", []),
+        params={"rid": leg["rid"], "cfg": cfg, "plan": list(leg.get("plan", [])),
                 **{k: leg[k] for k in leg if k not in reserved},
                 # per-leg COPY: mutating one config's required_shas must not
                 # alias into other legs or the campaign's verification baseline
@@ -138,11 +142,15 @@ def launch_gate(planned: list, launched: list) -> list[str]:
 def verify_shipment(shipment: dict, required_shas: dict) -> list[str]:
     """Product-hash sidecars + worker engine-SHA attestation vs a global tag."""
     v = []
-    # standalone-utility shape guard: typed violations, never a raise
+    # standalone-utility shape guard: typed violations, never a raise. The RunFn
+    # contract documents all three keys as PRESENT, so a missing key is
+    # MALFORMED too — an incomplete shipment must not verify as valid
     if not isinstance(shipment, dict):
         return ["MALFORMED shipment: not a dict"]
     for key in ("products", "sidecar", "attested_shas"):
-        if not isinstance(shipment.get(key, {}), dict):
+        if key not in shipment:
+            v.append(f"MALFORMED {key}: missing")
+        elif not isinstance(shipment[key], dict):
             v.append(f"MALFORMED {key}: not a dict")
     if v:
         return v
@@ -198,6 +206,12 @@ class FarmCampaign:
 
     def plan(self, legs: list[dict]) -> dict:
         self._gated = False                              # a new plan must re-gate
+        rids = [leg["rid"] for leg in legs]
+        dups = sorted({r for r in rids if rids.count(r) > 1})
+        if dups:                                         # a duplicate rid would
+            raise ValueError(                            # conflate cut-flow rows
+                f"duplicate rid(s) in plan: {dups} — rids must be unique "
+                "(cut-flow and ingest bookkeeping are keyed by rid)")
         ok = []
         for leg in legs:
             self.cf.enter(leg["rid"])
@@ -239,8 +253,10 @@ class FarmCampaign:
         ProviderExecutor.run / remote run_one contract: `result` is the RunFn's
         shipment (or None when the worker's idempotent skip fired — then the
         DONE.json result is recovered and ingested, same as execute_leg, so the
-        batch path never leaves the corpus short). Returns {rid: result-dict}
-        (each value the same status dict execute_leg/_govern return).
+        batch path never leaves the corpus short). Returns a dict of result-dicts
+        (the same status dicts execute_leg/_govern return) keyed by rid for
+        planned legs — plus, for protocol violations, entries keyed by the
+        dispatch's unrecognized run string (REJECTED, never ingested).
 
         Launch-completeness is ENFORCED: raises RuntimeError unless a passing
         gate_launch() ran against the current plan (re-plan resets the gate)."""

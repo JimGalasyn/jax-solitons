@@ -252,10 +252,43 @@ def test_execute_fleet_reconciles_dispatch(tmp_path):
 
 def test_verify_shipment_standalone_shape_guard():
     """Exported verify_shipment self-guards malformed shapes with typed
-    violations instead of raising."""
+    violations instead of raising — and a MISSING contract key is MALFORMED,
+    never silently valid."""
     assert "MALFORMED" in verify_shipment({"products": None}, {})[0]
     assert "MALFORMED" in verify_shipment({"products": {}, "sidecar": None}, {})[0]
     assert "MALFORMED" in verify_shipment("not-a-dict", {})[0]
+    v = verify_shipment({}, {})                     # all three contract keys missing
+    assert len(v) == 3 and all("missing" in x for x in v)
+    v = verify_shipment({"products": {}, "sidecar": {}}, {})
+    assert v == ["MALFORMED attested_shas: missing"]
+
+
+def test_plan_rejects_duplicate_rids(tmp_path):
+    """Duplicate rids would conflate cut-flow rows and ingest bookkeeping —
+    rejected at plan-time with a clear error."""
+    camp, _ = _camp(tmp_path)
+    legs = _legs()[:2]
+    legs[1] = dict(legs[1], rid=legs[0]["rid"])
+    with pytest.raises(ValueError, match="duplicate rid"):
+        camp.plan(legs)
+
+
+def test_leg_cfg_and_plan_copied_for_identity_stability(tmp_path):
+    """cfg/plan feed RunConfig.config_hash(); mutating the caller's dicts after
+    planning must not change a config's identity or leak across legs sharing
+    one cfg object."""
+    from jax_solitons.campaign import leg_to_config
+    shared_cfg = {"L": 40.0, "dx": 0.8, "C": 50.0}
+    shared_plan = [{"oid": "a"}]
+    c1 = leg_to_config({"rid": "l1", "cfg": shared_cfg, "plan": shared_plan}, "T", {})
+    c2 = leg_to_config({"rid": "l2", "cfg": shared_cfg, "plan": shared_plan}, "T", {})
+    h1, h2 = c1.config_hash(), c2.config_hash()
+    shared_cfg["C"] = 9999.0                       # caller mutates after planning
+    shared_plan.append({"oid": "b"})
+    assert c1.params["cfg"]["C"] == 50.0 and len(c1.params["plan"]) == 1
+    assert (c1.config_hash(), c2.config_hash()) == (h1, h2)   # identity stable
+    c1.params["cfg"]["C"] = 123.0                  # nor can one leg leak to another
+    assert c2.params["cfg"]["C"] == 50.0
 
 
 def test_malformed_shipment_rejected_not_crash(tmp_path):
