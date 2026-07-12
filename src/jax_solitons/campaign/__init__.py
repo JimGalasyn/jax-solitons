@@ -67,6 +67,13 @@ from jax_solitons.campaign.store import (
 )
 from jax_solitons.campaign.runpod import RunPodProvider
 from jax_solitons.campaign.vast import VastLedger, VastProvider
+from jax_solitons.campaign.farm import (
+    CutFlow,
+    FarmCampaign,
+    launch_gate,
+    leg_to_config,
+    verify_shipment,
+)
 
 # ModalExecutor is intentionally NOT imported here: `modal` is an optional
 # dependency, so `import jax_solitons.campaign` must not require it. Use
@@ -95,4 +102,7 @@ __all__ = [
     "run_campaign", "execute_config", "run_one", "load_run_fn",
     # multi-provider partition-and-merge
     "run_multi", "stream_multi", "split_configs", "CampaignReport",
+    # governed campaign: policy over mechanism (preflight, launch gate,
+    # shipment/SHA verification, cut-flow, ingest) — domain policy injected
+    "FarmCampaign", "CutFlow", "launch_gate", "verify_shipment", "leg_to_config",
 ]

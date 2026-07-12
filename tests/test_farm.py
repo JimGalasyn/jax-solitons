@@ -1,0 +1,125 @@
+"""The governed campaign (campaign/farm.py): policy over the mechanism.
+
+Physics-agnostic — a trivial mock RunFn drives plan -> gate -> execute -> verify
+-> ingest so the POLICY (envelope preflight, launch-completeness gate, shipment
+hash + engine-SHA attestation, restart-after-death, conflict guard, cut-flow) is
+exercised without any model. Domain policy is injected (preflight/ingest).
+"""
+import pytest
+
+from jax_solitons.campaign import FarmCampaign, launch_gate, verify_shipment
+from jax_solitons.campaign.farm import sha256_json
+
+
+def _record(rid, e=2.23):
+    return {"rid": rid, "receipts": [{"type": "GAMMA", "e": e}]}
+
+
+def _run_fn(behavior="good", die_flag=None):
+    def run_fn(config, ctx):
+        p = config.params
+        if behavior == "die_once" and not die_flag.get("died"):
+            die_flag["died"] = True
+            ctx.emit({"kind": "progress", "step": 1})     # flushed (C)
+            raise RuntimeError("host vanished mid-run")
+        rec = _record(p["rid"])
+        ctx.emit(rec["receipts"][0])                       # receipts = events
+        products = {"record": rec}
+        if behavior == "tamper":
+            products = {"record": {**rec, "e": 9.99}}
+        attested = dict(p["required_shas"])
+        if behavior == "drift":
+            attested[next(iter(attested))] = "drifted"
+        return {"products": products, "sidecar": {"record": sha256_json(rec)},
+                "attested_shas": attested}
+    return run_fn
+
+
+# in-envelope for the mock preflight below (a leg with C too large is dropped)
+def _preflight(cfg):
+    return [] if cfg.get("C", 0) <= 100 else [f"expulsion: C={cfg['C']} > 100"]
+
+
+def _legs():
+    good = {"L": 40.0, "dx": 0.8, "C": 50.0}
+    legs = [{"rid": f"leg_{i}", "cfg": good, "seed": i} for i in range(4)]
+    legs.append({"rid": "leg_bad", "cfg": {**good, "C": 400.0}, "seed": 9})
+    return legs
+
+
+def _camp(tmp_path, ingest=None):
+    shas = {"engine": "aaaa111", "tracer": "c811b70"}
+    return FarmCampaign("TAG", shas, str(tmp_path), preflight=_preflight,
+                        ingest=ingest), shas
+
+
+def test_preflight_drops_out_of_envelope_before_rent(tmp_path):
+    camp, _ = _camp(tmp_path)
+    st = camp.plan(_legs())
+    assert st == {"planned": 5, "valid": 4}         # leg_bad dropped pre-rent
+    assert {c.params["rid"] for c in camp.configs} == {"leg_0", "leg_1", "leg_2", "leg_3"}
+
+
+def test_launch_gate_refuses_partial_launch(tmp_path):
+    camp, _ = _camp(tmp_path)
+    camp.plan(_legs())
+    assert camp.gate_launch(camp.configs[:3])        # missing leg_3 -> refused
+    assert camp.gate_launch(camp.configs) == []      # complete set passes
+
+
+def test_execute_verify_ingest_and_idempotent_skip(tmp_path):
+    ingested = []
+    camp, _ = _camp(tmp_path, ingest=ingested.append)
+    camp.plan(_legs())
+    c0 = camp.configs[0]
+    assert camp.execute_leg(c0, _run_fn("good"))["status"] == "REGISTERED"
+    assert ingested == [_record("leg_0")]
+    # re-execute the same config -> campaign idempotent skip (A)
+    assert camp.execute_leg(c0, _run_fn("good"))["status"] == "SKIP_OK"
+
+
+def test_restart_after_worker_death(tmp_path):
+    camp, _ = _camp(tmp_path)
+    camp.plan(_legs())
+    c1 = camp.configs[1]
+    flag = {}
+    assert camp.execute_leg(c1, _run_fn("die_once", flag))["status"] == "LOST"
+    assert (camp.registry.register(c1).dir / "events.jsonl").exists()   # C flushed
+    assert camp.execute_leg(c1, _run_fn("die_once", flag))["status"] == "REGISTERED"
+
+
+def test_shipment_hash_and_sha_attestation_reject(tmp_path):
+    camp, _ = _camp(tmp_path)
+    camp.plan(_legs())
+    r = camp.execute_leg(camp.configs[2], _run_fn("tamper"))
+    assert r["status"] == "REJECTED" and "HASH_MISMATCH" in r["violations"][0]
+    r = camp.execute_leg(camp.configs[3], _run_fn("drift"))
+    assert r["status"] == "REJECTED" and "SHA_MISMATCH" in r["violations"][0]
+
+
+def test_conflict_never_overwritten(tmp_path):
+    camp, shas = _camp(tmp_path, ingest=[].append)
+    camp.plan(_legs())
+    camp.execute_leg(camp.configs[0], _run_fn("good"))
+    r = camp._ingest("leg_0", {"products": {"record": _record("leg_0", e=9.99)},
+                               "sidecar": {}, "attested_shas": shas})
+    assert r["status"] == "CONFLICT"
+
+
+def test_injected_executor_seam_d(tmp_path):
+    """execute_leg accepts an injected `run` (seam D) instead of in-process."""
+    camp, shas = _camp(tmp_path)
+    camp.plan(_legs())
+    c0 = camp.configs[0]
+    fixed = {"products": {"record": _record("leg_0")},
+             "sidecar": {"record": sha256_json(_record("leg_0"))},
+             "attested_shas": shas}
+    r = camp.execute_leg(c0, _run_fn("good"), run=lambda: fixed)
+    assert r["status"] == "REGISTERED"
+
+
+def test_verify_shipment_and_launch_gate_units():
+    assert verify_shipment({"products": {}, "sidecar": {}, "attested_shas": {}}, {}) == []
+    v = verify_shipment({"products": {"r": {"x": 1}}, "sidecar": {"r": "nope"},
+                         "attested_shas": {}}, {})
+    assert v and "HASH_MISMATCH" in v[0]
