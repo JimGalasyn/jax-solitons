@@ -206,11 +206,12 @@ class FarmCampaign:
 
     def plan(self, legs: list[dict]) -> dict:
         self._gated = False                              # a new plan must re-gate
-        rids = [leg["rid"] for leg in legs]
-        dups = sorted({r for r in rids if rids.count(r) > 1})
+        seen, dups = set(), set()                        # O(n) duplicate scan
+        for leg in legs:
+            (dups if leg["rid"] in seen else seen).add(leg["rid"])
         if dups:                                         # a duplicate rid would
             raise ValueError(                            # conflate cut-flow rows
-                f"duplicate rid(s) in plan: {dups} — rids must be unique "
+                f"duplicate rid(s) in plan: {sorted(dups)} — rids must be unique "
                 "(cut-flow and ingest bookkeeping are keyed by rid)")
         ok = []
         for leg in legs:
@@ -269,11 +270,17 @@ class FarmCampaign:
         for rec in dispatch(self.configs):
             c = by_name.get(rec.get("run"))
             if c is None:                                 # unplanned run name: a
-                rid = str(rec.get("run", "?"))            # protocol violation, never
-                self.cf.enter(rid)                        # governed/ingested
+                key = str(rec.get("run", "?"))            # protocol violation, never
+                # collision-proof the key: an invalid record whose run string
+                # equals a PLANNED rid must not reset that leg's cut-flow row or
+                # shadow its real record as a "duplicate"
+                planned_rids = {p.params["rid"] for p in self.configs}
+                while key in planned_rids or key in out:
+                    key += ".unplanned"
+                self.cf.enter(key)                        # governed/ingested: never
                 reason = "unplanned run name from dispatch (protocol violation)"
-                self.cf.mark(rid, "completed", False, reason)
-                out[rid] = {"rid": rid, "status": "REJECTED", "violations": [reason]}
+                self.cf.mark(key, "completed", False, reason)
+                out[key] = {"rid": key, "status": "REJECTED", "violations": [reason]}
                 continue
             rid = c.params["rid"]
             if rid in out:                                # duplicate record: keep the

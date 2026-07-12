@@ -250,6 +250,34 @@ def test_execute_fleet_reconciles_dispatch(tmp_path):
     assert "leg_0.dup" in drops and "duplicate" in drops["leg_0.dup"]
 
 
+def test_unplanned_name_cannot_shadow_planned_leg(tmp_path):
+    """HIGH-PRI: an invalid dispatch record whose run string equals a PLANNED
+    rid must not reset that leg's cut-flow row or block its real record — the
+    violation key is disambiguated (.unplanned) and the real leg still lands."""
+    ingested = []
+    camp, shas = _camp(tmp_path, ingest=ingested.append)
+    camp.plan(_legs())
+    assert camp.gate_launch(camp.configs) == []
+
+    def dispatch(configs):
+        good = lambda c: {"run": c.run_name(),
+                          "result": {"products": {"record": _record(c.params["rid"])},
+                                     "sidecar": {"record": sha256_json(_record(c.params["rid"]))},
+                                     "attested_shas": dict(shas)},
+                          "skipped": False}
+        # malicious/buggy record: its run string IS a planned rid (not a run_name)
+        ghost = {"run": "leg_0", "result": {"products": {"record": {"x": 1}}},
+                 "skipped": False}
+        return [ghost] + [good(c) for c in configs]
+
+    out = camp.execute_fleet(dispatch)
+    assert out["leg_0"]["status"] == "REGISTERED"          # real leg NOT shadowed
+    assert out["leg_0.unplanned"]["status"] == "REJECTED"  # ghost disambiguated
+    assert "leg_0" in [r["rid"] for r in ingested]
+    # leg_0's cut-flow row is fully governed, not reset by the ghost
+    assert all(v is True for v in camp.cf.rows["leg_0"])
+
+
 def test_verify_shipment_standalone_shape_guard():
     """Exported verify_shipment self-guards malformed shapes with typed
     violations instead of raising — and a MISSING contract key is MALFORMED,
