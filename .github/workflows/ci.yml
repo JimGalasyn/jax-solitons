@@ -5,29 +5,28 @@ on:
     branches: [main]
   pull_request:
 
-# One self-hosted runner -> cancel superseded runs of the same ref so pushes
-# don't pile up ~20-min jobs behind each other.
+# Cancel superseded runs of the same ref so rapid pushes don't pile up.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Minimal default GITHUB_TOKEN scope: the test job only checks out + uploads
-# coverage (which uses its own CODECOV_TOKEN). Limits blast radius if a job ever
-# runs on the self-hosted runner.
+# coverage (which uses its own CODECOV_TOKEN).
 permissions:
   contents: read
 
 jobs:
   test:
-    # Self-hosted runner on technozoic_00 (ssdnodes, label 'nwt') for push +
-    # same-repo PRs. FORK PRs fall back to GitHub-hosted ubuntu-latest, so
-    # untrusted fork code never executes on our box -- in-code gating that does
-    # not depend on the repo "require approval for outside collaborators" UI
-    # setting (kept as defence in depth).
-    runs-on: ${{ (github.event.pull_request.head.repo.fork && fromJSON('["ubuntu-latest"]')) || fromJSON('["self-hosted", "nwt"]') }}
+    # GitHub-hosted: the suite is CPU-only and all deps are on PyPI (incl.
+    # nwt-substrate), so no self-hosted/GPU runner is needed. GPU farming lives
+    # in the campaign layer (cloud GPUs), not CI. ubuntu-latest gives parallel
+    # matrix jobs and always-on availability.
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.10", "3.12"]
+    env:
+      JAX_PLATFORMS: cpu        # deterministic CPU jax in CI
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
