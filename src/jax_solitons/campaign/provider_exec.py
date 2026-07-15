@@ -41,6 +41,16 @@ DEFAULT_KEY = "~/.ssh/vastai"
 # Matches the engine_dogfood vast/onstart.sh, which builds the engine into this env.
 DEFAULT_REMOTE_PYTHON = "/workspace/jaxenv/bin/python"
 
+# Shared ssh/scp `-o` options for every box connection (factored so the set can't
+# drift across the four helpers -- which is how the missing keepalive arose, #43).
+# ConnectTimeout only bounds CONNECTION setup; ServerAliveInterval adds a liveness
+# check on a RUNNING session, so a host that dies or goes unreachable MID-command
+# surfaces as a non-zero exit in ~ServerAliveInterval*ServerAliveCountMax (~2 min)
+# instead of hanging until run_timeout (default 9000s) while the box may keep
+# billing -- the leg then fails over / relaunches promptly.
+_SSH_OPTS = ["-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=15",
+             "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"]
+
 
 def _ssh(key: str, host: str, port: int, cmd: str, timeout: float = 120):  # pragma: no cover
     """Run one command on the box; returns (rc, combined stdout+stderr).
@@ -51,8 +61,8 @@ def _ssh(key: str, host: str, port: int, cmd: str, timeout: float = 120):  # pra
     record) instead of the exception aborting the whole campaign."""
     try:
         r = subprocess.run(
-            ["ssh", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
-             "-o", "ConnectTimeout=15", "-p", str(port), f"root@{host}", cmd],
+            ["ssh", "-i", os.path.expanduser(key), *_SSH_OPTS,
+             "-p", str(port), f"root@{host}", cmd],
             capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout + r.stderr
     except subprocess.TimeoutExpired as e:
@@ -70,8 +80,8 @@ def _ssh_stream(key: str, host: str, port: int, cmd: str, timeout: float,
     background reader thread pumps the pipe (so `proc.wait(timeout=...)` keeps
     clean timeout semantics regardless of whether the box is emitting output).
     Live subprocess to a rented host; tests monkeypatch this."""
-    args = ["ssh", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
-            "-o", "ConnectTimeout=15", "-p", str(port), f"root@{host}", cmd]
+    args = ["ssh", "-i", os.path.expanduser(key), *_SSH_OPTS,
+            "-p", str(port), f"root@{host}", cmd]
     buf: list[str] = []
     try:
         proc = subprocess.Popen(args, stdout=subprocess.PIPE,
@@ -102,7 +112,7 @@ def _scp_down(key: str, host: str, port: int, remote: str, local: str,
               timeout: float = 600):  # pragma: no cover  (live subprocess)
     try:
         r = subprocess.run(
-            ["scp", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
+            ["scp", "-i", os.path.expanduser(key), *_SSH_OPTS,
              "-P", str(port), "-r", f"root@{host}:{remote}", local],
             capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout + r.stderr
@@ -115,7 +125,7 @@ def _scp_up(key: str, host: str, port: int, local: str, remote: str,
     """Ship one local path up to the box (the FleetExecutor driver-script step)."""
     try:
         r = subprocess.run(
-            ["scp", "-i", os.path.expanduser(key), "-o", "StrictHostKeyChecking=no",
+            ["scp", "-i", os.path.expanduser(key), *_SSH_OPTS,
              "-P", str(port), "-r", local, f"root@{host}:{remote}"],
             capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout + r.stderr
