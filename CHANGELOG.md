@@ -7,6 +7,23 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-07-15
+
+### Added
+- **Knot/link invariants** (#66) — a new `jax_solitons.invariants` subpackage
+  extracted from the retired nwt-substrate: colored Jones polynomials, Gauss
+  linking integrals, and torus-knot constructions, plus an `event_graph`
+  helper. Characterizes vortex-knot / hopfion topology.
+
+### Changed
+- **Campaign SSH liveness** (#54) — `ServerAliveInterval` on compute-phase
+  ssh/scp so a host that dies mid-command is detected instead of hanging
+  silently (#43 part 1).
+
+### Fixed
+- **Flaky O(3) invariance test** (#53) — run the Tier-1 exactness suite in
+  float64 so the exact identities aren't subject to float32 platform drift.
+
 ## [0.0.5] - 2026-06-19
 
 ### Added

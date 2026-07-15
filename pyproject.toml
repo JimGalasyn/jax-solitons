@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jax-solitons"
-version = "0.0.6"
+version = "0.0.7"
 description = "A general JAX engine for classical field-theory solitons: composable energy functionals, topology-preserving discretizations, GPU-farm-ready relaxation and dynamics."
 readme = "README.md"
 license = { text = "MIT" }
