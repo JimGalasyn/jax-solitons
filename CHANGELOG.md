@@ -7,6 +7,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-07-17
+
 ### Changed
 - **The campaign / GPU-farming layer was extracted to
   [run-farm](https://github.com/JimGalasyn/run-farm)** (a new dependency,

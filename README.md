@@ -53,9 +53,13 @@ intersection none of them do, built on four design commitments:
    it is an injected `RunFn`): a config-hashed registry + full-state checkpoints
    (field + velocity/optimizer state + RNG key) for bit-identical restart;
    streaming event-records, with full fields kept only on triggered events;
-   probe-or-bail host admission; all over a pluggable executor (local now;
-   SkyPilot for spot fleets, stubbed). A literature sweep found no library
-   covers this combination — see [CAMPAIGN.md](CAMPAIGN.md).
+   probe-or-bail host admission; all over a pluggable executor (local, plus
+   Vast/RunPod/Modal brokers). That layer was extracted at v0.0.8 to the
+   standalone [run-farm](https://github.com/JimGalasyn/run-farm) package (a
+   dependency), so it can serve other engines; `jax-solitons` crosses it with
+   `runfns.faddeev_relax_then_id` and the `farm_config.soliton_leg_to_config`
+   factory. A literature sweep found no library covers this combination — see
+   [CAMPAIGN.md](CAMPAIGN.md).
 
 Design principles (the scale-first contract every PR is reviewed
 against) are in [DESIGN.md](DESIGN.md).
@@ -106,10 +110,10 @@ libraries become toys.
 | `topology` | area-form plaquette F_ij, Hopf charge (differentiable) | **working, validated** |
 | `seeds` | rational-map hopfion ansatz | **working, validated** |
 | `seeds` | solid-angle (VOS) minimal superflow, composition | porting |
-| `runs` | `RunConfig`; full-state restartable checkpoints (bit-identical restart, gated in CI); config-hashed run dirs + manifest | **working, gated** |
-| `campaign` | the A/B/C/E boundary — `RunRegistry`, `EventSink`, `Admission`, `Executor` protocols + `run_campaign`; local reference backends + `SkyPilotExecutor` stub | **working, gated** |
+| `runs` | `RunConfig` (the engine's run identity); full-state restartable checkpoints + config-hashed run dirs (bit-identical restart, gated in CI) re-exported from `run-farm` | **working, gated** |
+| `farm_config` | `soliton_leg_to_config` — the `FarmCampaign` config factory that maps a farm leg to this engine's `RunConfig` | **working, gated** |
 | `measure` | implicit core-curve tracer (lax.scan predictor-corrector), Gauss linking, arc-length resampling | **working, gated** |
-| `runfns` / `examples` | `faddeev_relax_then_id` (relax-then-ID behind the campaign contract) + a runnable two-run campaign | **working, gated** |
+| `runfns` / `examples` | `faddeev_relax_then_id` (relax-then-ID behind the `run-farm` campaign contract) + a runnable two-run campaign | **working, gated** |
 
 Batch-first state (`vmap`) is demonstrated in CI: a vmapped dynamics step
 over a stack of fields is verified identical to stepping each field
