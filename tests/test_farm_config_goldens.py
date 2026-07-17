@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import pytest
 
-# Imported indirectly so this file survives the extraction by changing ONE line:
-#   from jax_solitons.farm_config import soliton_leg_to_config as leg_to_config
-#     ->  from jax_solitons.farm_config import soliton_leg_to_config as leg_to_config
+# Aliased to `leg_to_config` so the golden assertions below read unchanged across
+# the extraction (the whole file survived it by swapping this one import). Pre-
+# extraction this was `from jax_solitons.campaign.farm import leg_to_config`; the
+# post-extraction factory is `jax_solitons.farm_config.soliton_leg_to_config`.
 from jax_solitons.farm_config import soliton_leg_to_config as leg_to_config
 
 # Exercises every branch at once: explicit model/N/seed, an unreserved passthrough

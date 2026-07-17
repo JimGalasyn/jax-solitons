@@ -10,8 +10,8 @@ core curve and captures it as a triggered full-state event (P7, relax-then-ID:
 descent cannot create topology, so basin-ID is faithful where in-bath is not).
 
 This module is the ONE place physics meets the boundary: it imports models,
-seeds, steppers, and the campaign `RunContext`, and exposes a single callable
-matching `campaign.RunFn`. Nothing under `campaign/` imports anything here.
+seeds, steppers, and run-farm's `RunContext`, and exposes a single callable
+matching `run_farm.RunFn`. Nothing in run-farm imports anything here.
 """
 
 from __future__ import annotations
