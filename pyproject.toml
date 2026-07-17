@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jax-solitons"
-version = "0.0.7"
+version = "0.0.8"
 description = "A general JAX engine for classical field-theory solitons: composable energy functionals, topology-preserving discretizations, GPU-farm-ready relaxation and dynamics."
 readme = "README.md"
 license = { text = "MIT" }
@@ -28,6 +28,12 @@ dependencies = [
   "jax>=0.4.30",
   "numpy>=1.24",
   "scipy>=1.10",
+  # The campaign/GPU-farming layer, extracted at rule-of-three (2026-07): config-
+  # hashed registry, restart-exact checkpoints, spot-fleet executors, cloud brokers.
+  # jax_solitons.RunConfig structurally satisfies run_farm.RunConfig; the physics
+  # crosses as runfns:faddeev_relax_then_id. Plain specifier, not a git URL: PyPI
+  # forbids direct references in published metadata.
+  "run-farm>=0.1.1",
 ]
 
 [project.optional-dependencies]
@@ -58,11 +64,9 @@ oracle = [
 sharding = [
   "jaxdecomp>=0.3",  # distributed 3D FFT + halo exchange
 ]
-# Note: the Vast.ai executor (campaign/vast.py) is intentionally stdlib-only
-# (urllib) — no extra needed — because the vastai SDK breaks against the live API.
-checkpoint = [
-  "orbax-checkpoint",
-]
+# The campaign layer moved to run-farm (2026-07): its Vast broker, the modal
+# executor, and the Orbax checkpoint roadmap now live there. Depend on run-farm
+# (base deps) for the campaign; its own extras (`modal`, `s3`) cover the rest.
 
 [project.urls]
 Homepage = "https://github.com/JimGalasyn/jax-solitons"
@@ -75,14 +79,6 @@ packages = ["src/jax_solitons"]
 testpaths = ["tests"]
 markers = [
   "acceptance: regression contract gates (the validation chain of the source engine)",
-]
-
-[tool.coverage.run]
-omit = [
-  # Optional cloud integration: needs the `modal` SDK (not a CI test dep) and a
-  # live Modal account/GPU to exercise. Its run_one unit + the seam it plugs into
-  # are covered; the modal-specific glue can't be unit-tested without modal.
-  "*/campaign/modal_exec.py",
 ]
 
 [tool.coverage.report]

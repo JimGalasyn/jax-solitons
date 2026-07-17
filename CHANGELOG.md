@@ -7,6 +7,23 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Changed
+- **The campaign / GPU-farming layer was extracted to
+  [run-farm](https://github.com/JimGalasyn/run-farm)** (a new dependency,
+  `run-farm>=0.1.1`). `src/jax_solitons/campaign/` and its ~200 tests are gone; the
+  physics-agnostic A/B/C/D/E/F contract, the restartable-run helpers from `runs.py`
+  (`save_checkpoint`/`load_checkpoint`/`run_dir`), and the Vast/RunPod/Modal brokers
+  now live in run-farm. This honors the rule-of-three gate CAMPAIGN.md set: the
+  A/B/C/E API stabilized (the Provider seam absorbed three backends with zero
+  changes), with jax-morpho's evolution loop the near-future second consumer.
+- **What stays:** `RunConfig` (byte-stable — it names every run directory ever
+  written, and structurally satisfies `run_farm.RunConfig`), the `faddeev_relax_then_id`
+  RunFn, the new `jax_solitons.farm_config.soliton_leg_to_config` factory, and
+  `tests/test_campaign.py` as the downstream integration test. Existing
+  `from jax_solitons.campaign import ...` call sites become `from run_farm import ...`;
+  `jax_solitons.runs` re-exports the moved checkpoint helpers so its own API is stable.
+
+
 ## [0.0.7] - 2026-07-15
 
 ### Added

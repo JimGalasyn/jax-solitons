@@ -1,15 +1,18 @@
 """Restartable, registered runs (design requirement R4).
 
 RunConfig is the single source of truth for a run: serialized into every
-output, hashed into the run directory name. Checkpoints carry the FULL
-integrator state (field + velocity/optimizer state + RNG key), so a
-restarted run reproduces the uninterrupted trajectory bit-identically at
-fixed dtype and device count.
+output, hashed into the run directory name. It **structurally satisfies the
+`run_farm.RunConfig` Protocol** (pinned by tests/test_protocol_conformance.py),
+so the extracted campaign layer drives jax-solitons runs without importing
+anything soliton-specific. Its `to_json` bytes are the permanent names of every
+run directory in every `campaign_out` ledger ever written -- this class does not
+change; its identity is frozen (tests/test_run_config_goldens.py).
 
-Backend note: checkpoints are .npz with the config embedded as JSON --
-simple, dependency-free, and deterministic. Orbax replaces this layer when
-sharded multi-device arrays land (it adds async + sharding-aware layout,
-not different semantics).
+The full-state checkpoint helpers (`save_checkpoint`/`load_checkpoint`/`run_dir`)
+were physics-agnostic and moved WHOLESALE to `run_farm.config` when the campaign
+layer was extracted (2026-07). They are re-exported here so existing call sites
+keep working; `load_checkpoint` is bound to this engine's `RunConfig` so it
+rebuilds the concrete type rather than run-farm's default.
 """
 
 from __future__ import annotations
@@ -17,11 +20,13 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-from pathlib import Path
 from typing import Any
 
-import jax.numpy as jnp
-import numpy as np
+# Moved to run-farm at extraction; re-exported so `jax_solitons.runs.<helper>`
+# still resolves. Orbax replaces this checkpoint layer when sharded multi-device
+# arrays land -- that roadmap is now run-farm's.
+from run_farm.config import run_dir, save_checkpoint
+from run_farm.config import load_checkpoint as _load_checkpoint
 
 
 @dataclasses.dataclass(frozen=True)
@@ -56,37 +61,16 @@ class RunConfig:
         return f"{self.model}_N{self.N}_{self.config_hash()}"
 
 
-def save_checkpoint(path, state: dict, config: RunConfig, step: int) -> None:
-    """Write a full-state checkpoint: a flat dict of arrays (field, velocity,
-    optimizer moments, RNG key, ...) + the RunConfig + the step counter."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    arrays = {f"state__{k}": np.asarray(v) for k, v in state.items()}
-    np.savez_compressed(path, __config__=config.to_json(), __step__=step,
-                        **arrays)
-
-
 def load_checkpoint(path) -> tuple[dict, RunConfig, int]:
-    """Read a checkpoint back: (state dict of jnp arrays, RunConfig, step)."""
-    with np.load(path, allow_pickle=False) as d:
-        config = RunConfig.from_json(str(d["__config__"]))
-        step = int(d["__step__"])
-        state = {k[len("state__"):]: jnp.asarray(d[k])
-                 for k in d.files if k.startswith("state__")}
-    return state, config, step
+    """Read a checkpoint back: (state dict, RunConfig, step).
+
+    `run_farm.config.load_checkpoint` bound to this engine's config type, so a
+    restored checkpoint comes back as a `jax_solitons.RunConfig`, not run-farm's
+    default `SimpleRunConfig`.
+    """
+    return _load_checkpoint(path, config_class=RunConfig)
 
 
-def run_dir(base, config: RunConfig) -> Path:
-    """Config-hashed run directory with the config serialized into it, and a
-    one-line entry appended to the base manifest (the run registry)."""
-    base = Path(base)
-    d = base / config.run_name()
-    d.mkdir(parents=True, exist_ok=True)
-    cfg_file = d / "config.json"
-    if not cfg_file.exists():
-        cfg_file.write_text(config.to_json() + "\n")
-        with (base / "MANIFEST.jsonl").open("a") as mf:
-            mf.write(json.dumps({"run": config.run_name(),
-                                 "config": json.loads(config.to_json())})
-                     + "\n")
-    return d
+# `save_checkpoint` and `run_dir` are re-exported unchanged from run_farm.config
+# (imported at module top); they never read a soliton-specific field.
+__all__ = ["RunConfig", "save_checkpoint", "load_checkpoint", "run_dir"]

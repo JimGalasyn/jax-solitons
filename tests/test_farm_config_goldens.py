@@ -21,9 +21,9 @@ from __future__ import annotations
 import pytest
 
 # Imported indirectly so this file survives the extraction by changing ONE line:
-#   from jax_solitons.campaign.farm import leg_to_config
+#   from jax_solitons.farm_config import soliton_leg_to_config as leg_to_config
 #     ->  from jax_solitons.farm_config import soliton_leg_to_config as leg_to_config
-from jax_solitons.campaign.farm import leg_to_config
+from jax_solitons.farm_config import soliton_leg_to_config as leg_to_config
 
 # Exercises every branch at once: explicit model/N/seed, an unreserved passthrough
 # key, and campaign-authoritative keys the leg tries to spoof.
