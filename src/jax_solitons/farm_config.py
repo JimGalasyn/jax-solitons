@@ -1,13 +1,12 @@
 """The `FarmCampaign` config factory for this engine's config shape.
 
 When the campaign layer was extracted to run-farm, `campaign.farm.leg_to_config`
-split in two: the physics-agnostic params construction (copy semantics, unspoofable
-`gtag`/`required_shas`) became `run_farm.farm.leg_params`, and the soliton-shaped
-field assignment -- which leg keys become `RunConfig(model=, N=, L=, seed=)` -- stayed
-here as the engine's own `config_factory`.
+split in two: the physics-agnostic params construction became `run_farm.farm.leg_params`,
+and the soliton-shaped field assignment stayed here as the engine's `config_factory`.
 
 Pass `soliton_leg_to_config` to `FarmCampaign(config_factory=...)` to plan a farm
-over `jax_solitons.RunConfig` instead of run-farm's default `SimpleRunConfig`.
+over `jax_solitons.RunConfig` instead of run-farm's default `SimpleRunConfig`. See
+`soliton_leg_to_config` for the byte-critical `reserved` invariant.
 """
 
 from __future__ import annotations

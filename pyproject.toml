@@ -33,6 +33,12 @@ dependencies = [
   # jax_solitons.RunConfig structurally satisfies run_farm.RunConfig; the physics
   # crosses as runfns:faddeev_relax_then_id. Plain specifier, not a git URL: PyPI
   # forbids direct references in published metadata.
+  # HARD (not optional) dependency by design: run-farm supplies runs.py's checkpoint
+  # helpers (save/load_checkpoint, run_dir), which the core engine's restartable-run
+  # contract (R4) leans on even for a single local run -- not just fleet campaigns.
+  # Its base deps are only jax + numpy (the cloud SDKs live behind run-farm's own
+  # `modal`/`s3` extras), both already required above, so the PDE-only user pulls
+  # zero net-new transitive dependencies.
   "run-farm>=0.1.1",
 ]
 

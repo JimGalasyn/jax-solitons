@@ -23,7 +23,6 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   `from jax_solitons.campaign import ...` call sites become `from run_farm import ...`;
   `jax_solitons.runs` re-exports the moved checkpoint helpers so its own API is stable.
 
-
 ## [0.0.7] - 2026-07-15
 
 ### Added
