@@ -1,7 +1,7 @@
 """First real `RunFn`: the Faddeev relax-then-ID pipeline behind the campaign
 contract (design: CAMPAIGN.md).
 
-Proof-of-use for `jax_solitons.campaign`. A physics `RunFn` that deep-relaxes a
+Proof-of-use for `run_farm` (the extracted campaign layer). A physics `RunFn` that deep-relaxes a
 rational-map hopfion in the CP^1 spinor frame (the frame that reaches the
 virial point; see steppers/adam.py), streams a charge/energy ledger as it goes
 (P6), checkpoints FULL optimizer state so a preempted run resumes bit-
@@ -10,8 +10,8 @@ core curve and captures it as a triggered full-state event (P7, relax-then-ID:
 descent cannot create topology, so basin-ID is faithful where in-bath is not).
 
 This module is the ONE place physics meets the boundary: it imports models,
-seeds, steppers, and the campaign `RunContext`, and exposes a single callable
-matching `campaign.RunFn`. Nothing under `campaign/` imports anything here.
+seeds, steppers, and run-farm's `RunContext`, and exposes a single callable
+matching `run_farm.RunFn`. Nothing in run-farm imports anything here.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-from jax_solitons.campaign.protocols import RunContext
+from run_farm.protocols import RunContext
 from jax_solitons.grid import BoxGrid
 from jax_solitons.measure import curve_length, trace_curves
 from jax_solitons.models.faddeev import faddeev_cp1_model, n_from_state
