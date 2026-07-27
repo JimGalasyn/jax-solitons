@@ -1,7 +1,7 @@
 # Canonical identities for git log / shortlog / blame.
 #
 # Commits made from a work machine picked up jim.galasyn@confluent.io from a global
-# ~/.gitconfig (56 of 109 commits here). This repo now carries a repo-local
+# ~/.gitconfig (57 of 110 commits here, as of 2026-07-27). This repo now carries a repo-local
 # user.email, so it cannot recur. The affected commits are already pushed, so a
 # mailmap is used rather than a history rewrite: rewriting would change every SHA
 # from the first affected commit forward and break existing clones, to remove an
@@ -9,6 +9,9 @@
 #
 # The author name also appears both as "Jim" and as "Jim Galasyn"; both are mapped
 # to one canonical form.
+#
+# Counts above are a snapshot; recompute with
+#   git log --format='%ae' | sort | uniq -c
 #
 # Format: Proper Name <proper@email> <commit@email>
 
