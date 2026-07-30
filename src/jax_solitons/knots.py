@@ -1,12 +1,19 @@
 """Core-curve knot identification: what KNOT is a soliton's core curve?
 
-The inverse of the carrier-knot ladder: given a (dynamically produced or seeded)
-soliton field, recover the KNOT TYPE of its core curve and read off its Alexander
-determinant -- which maps onto the Paper-6 carrier ladder (unknot=1 lepton,
-trefoil=3 baryon, cinquefoil=5 nucleon, ...). This is the analysis primitive a
-campaign's relax-then-ID census uses; it's physics-engine-agnostic (numpy/scipy,
-plus pyknotid for the determinant), so it runs on a remote worker just as well as
-locally.
+Given a (dynamically produced or seeded) soliton field, recover the KNOT TYPE of
+its core curve and read off its Alexander determinant (unknot=1, trefoil=3,
+cinquefoil=5, ...). This is the analysis primitive a campaign's relax-then-ID
+census uses; it's physics-engine-agnostic (numpy/scipy, plus pyknotid for the
+determinant), so it runs on a remote worker just as well as locally.
+
+Labels are KNOT-THEORETIC ONLY. They used to carry particle-sector names
+("trefoil/baryon", "cinquefoil/nucleon") from the Paper-6 carrier ladder; those are
+removed. Two independent reasons: the NWT carrier-to-particle mapping was not made
+to work, and this module's own COMPENDIUM.md already records the audit that refutes
+the obvious version of it -- the carrier is fixed by the substrate algebra, not by
+any 3-D embedding, and lifting walks to embeddings gives "mostly the unknot, with
+<=14% agreement with the carrier". A determinant is a determinant; what it is a
+carrier OF is not something this function can know.
 
 Two pieces:
 
@@ -54,9 +61,10 @@ def _knot_class():
     return Knot
 
 
-# carrier determinant -> Paper-6 sector label (T(2,n) ladder)
-_DET_CARRIER = {1: "unknot/lepton T(2,1)", 2: "Hopf-link/meson T(2,2)",
-                3: "trefoil/baryon T(2,3)", 5: "cinquefoil/nucleon T(2,5)",
+# Alexander determinant -> knot name on the T(2,n) ladder. Knot theory only:
+# no particle-sector names here (see the module docstring).
+_DET_CARRIER = {1: "unknot T(2,1)", 2: "Hopf link T(2,2)",
+                3: "trefoil T(2,3)", 5: "cinquefoil T(2,5)",
                 7: "T(2,7)", 9: "T(2,9)"}
 
 
