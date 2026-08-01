@@ -14,13 +14,19 @@ import pytest
 
 from jax_solitons import BoxGrid
 from jax_solitons.models.skyrme import (
+    E0MassTerm,
     S3Constraint,
     baryon_charge,
     skyrme_bound,
+    skyrme_energy_density,
     skyrme_model,
 )
 from jax_solitons.models.skyrme import _PROBE_POINTS, _degree_at
-from jax_solitons.seeds import skyrmion_hedgehog, skyrmion_rational_map
+from jax_solitons.seeds import (
+    skyrmion_hedgehog,
+    skyrmion_product,
+    skyrmion_rational_map,
+)
 
 GRID = BoxGrid(N=24, L=8.0)
 MODEL = skyrme_model(c2=1.0, c4=1.0)
@@ -149,3 +155,70 @@ def test_seed_respects_bogomolny_bound(B):
     phi = skyrmion_hedgehog(GRID) if B == 1 else skyrmion_rational_map(GRID, B=B)
     E = float(MODEL.energy(phi, GRID))
     assert E >= skyrme_bound(B, 1.0, 1.0), f"B={B}: E={E} below bound"
+
+
+# --- the product (B=2) seed -------------------------------------------------
+#
+# `skyrmion_product` is the composition ansatz the B=2 binding calibration in
+# docs/SKYRME.md runs through, so leaving it unexercised would mean the seed
+# behind this module's headline result had no test at all.
+
+def test_product_seed_carries_baryon_number_two():
+    """U = U_A(x - d/2) U_B(x + d/2) of two B=1 hedgehogs is a degree-2 map.
+    Exact: the preimage count is an integer invariant, not a tolerance."""
+    assert baryon_charge(skyrmion_product(GRID), GRID) == 2.0
+
+
+def test_product_seed_is_a_unit_four_vector():
+    """The quaternion product of two unit fields is renormalised, so the S^3
+    constraint holds pointwise on the output rather than only on the inputs."""
+    phi = skyrmion_product(GRID)
+    assert phi.shape == (4, GRID.N, GRID.N, GRID.N)
+    norm = jnp.sqrt((phi**2).sum(axis=0))
+    assert float(jnp.abs(norm - 1.0).max()) < 1e-6
+
+
+def test_product_seed_relative_isospin_preserves_topology():
+    """A relative iso-orientation rotates U_B's pion field only. That changes
+    the energy (it is the attractive channel the binding cross-check uses) but
+    it cannot change the degree, which is what makes the comparison fair."""
+    R = np.array([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]])
+    phi = skyrmion_product(GRID, rel_iso=R)
+    assert baryon_charge(phi, GRID) == 2.0
+    norm = jnp.sqrt((phi**2).sum(axis=0))
+    assert float(jnp.abs(norm - 1.0).max()) < 1e-6
+
+
+def test_product_seed_respects_bogomolny_bound():
+    """The composed B=2 seed sits above the bound, like the other seeds."""
+    E = float(MODEL.energy(skyrmion_product(GRID), GRID))
+    assert E >= skyrme_bound(2, 1.0, 1.0), f"E={E} below bound"
+
+
+# --- energy density ---------------------------------------------------------
+
+@pytest.mark.parametrize("m_pi", [0.0, 0.5])
+def test_energy_density_integrates_to_the_model_energy(m_pi):
+    """The pointwise density is the same energy the Model reports, decomposed:
+    sum(density) * dx^3 == Model.energy. If these ever disagree, one of the two
+    is wrong, and separation scans read the density rather than the total."""
+    phi = skyrmion_product(GRID)
+    model = skyrme_model(c2=1.0, c4=1.0, m_pi=m_pi)
+    dens = skyrme_energy_density(phi, GRID, c2=1.0, c4=1.0, m_pi=m_pi)
+    assert dens.shape == (GRID.N, GRID.N, GRID.N)
+    assert float(jnp.sum(dens)) * GRID.dx**3 == pytest.approx(
+        float(model.energy(phi, GRID)), rel=1e-5)
+
+
+def test_pion_mass_term_matches_its_closed_form():
+    """E0 = c0 m_pi^2 sum(1 - phi0) dx^3, and a nonzero m_pi is what puts the
+    term into the model at all (the massless default omits it)."""
+    phi = skyrmion_rational_map(GRID, B=2)
+    term = E0MassTerm(c0=1.0, m_pi=0.5)
+    expected = 1.0 * 0.5**2 * float(jnp.sum(1.0 - phi[0])) * GRID.dx**3
+    assert float(term(phi, GRID)) == pytest.approx(expected, rel=1e-6)
+
+    massless = skyrme_model(c2=1.0, c4=1.0)
+    massive = skyrme_model(c2=1.0, c4=1.0, m_pi=0.5)
+    assert len(massive.terms) == len(massless.terms) + 1
+    assert float(massive.energy(phi, GRID)) > float(massless.energy(phi, GRID))
