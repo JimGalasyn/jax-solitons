@@ -8,6 +8,24 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ## [Unreleased]
 
 ### Added
+- **`jax_solitons.models.skyrme`** — the SU(2)/S³ Skyrme model (`skyrme_model`,
+  `baryon_charge`, `skyrme_energy_density`, `skyrme_bound`, `E0MassTerm`, `E2O4Term`,
+  `E4SkyrmeTerm`, `S3Constraint`), plus Skyrme seeds in `jax_solitons.seeds` and
+  `docs/SKYRME.md`. Baryon number is exact and probe-independent.
+
+  Validated against the literature rather than against itself: a resolution ladder
+  (N=64→160, dx 0.250→0.100) recovers the published classical massless Skyrme **B=2
+  binding of ~4.3%**, bracketing it from 3.91% to 4.58% as dx→0, with every leg above
+  the Bogomolny bound and B held at +1/+2. Nine tests cover baryon-charge integrality,
+  hedgehog B=+1, rational-map degree, translation/O(4)/SO(4) invariance, the S³
+  constraint algebra, and the bound.
+
+  This supersedes an earlier reading from the same work that the binding sat below the
+  resolution floor. That was two bugs, both named in `docs/SKYRME.md`: a box too small
+  for the soliton (c4=4 put r0*~4 beyond L/2), and fixed-lr Adam never settling. The
+  conclusion flipped once the box fit and the relaxer settled — so the method can
+  resolve a real binding to ~0.1%.
+
 - **`jax_solitons.ehn`** — the Eto-Hamada-Nitta gauged two-scalar engine, migrated out
   of the deprecated `null-worldtube-private` per its `EXTRACTION_DECISIONS.md`
   (2026-07-29). Four modules (`relax`, `energy`, `knot_batch`, `cross_linking`) plus a

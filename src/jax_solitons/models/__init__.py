@@ -33,8 +33,26 @@ from jax_solitons.models.nlkg import (
     NLKGPotentialTerm,
     nlkg_model,
 )
+from jax_solitons.models.skyrme import (
+    E0MassTerm,
+    E2O4Term,
+    E4SkyrmeTerm,
+    S3Constraint,
+    baryon_charge,
+    skyrme_bound,
+    skyrme_energy_density,
+    skyrme_model,
+)
 
 __all__ = [
+    "E0MassTerm",
+    "E2O4Term",
+    "E4SkyrmeTerm",
+    "S3Constraint",
+    "baryon_charge",
+    "skyrme_bound",
+    "skyrme_energy_density",
+    "skyrme_model",
     "CP1Constraint",
     "CP1Term",
     "CovariantKineticTerm",
