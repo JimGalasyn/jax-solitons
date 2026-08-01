@@ -1,14 +1,37 @@
 # Canonical identities for git log / shortlog / blame.
 #
-# Commits made from a work machine picked up jim.galasyn@confluent.io from a global
-# ~/.gitconfig (57 of 113 commits here, as of 2026-07-31). The affected commits are
-# already pushed, so a mailmap is used rather than a history rewrite: rewriting would
-# change every SHA from the first affected commit forward and break existing clones,
-# to remove an address that remains recoverable from GitHub's event history regardless.
+# Commits here carrying jim.galasyn@confluent.io have TWO different causes. The
+# distinction matters, because only one of them is something a machine can be
+# configured out of — and because only one of them has stopped:
 #
-# The reason this comment used to give for why it cannot recur — a repo-local
-# user.email — is wrong: this repo has never carried one. The guard lives in each
-# machine's ~/.gitconfig, and it is NOT the same on every machine:
+#   - 57 were made from a work machine, picking the address up from a global
+#     ~/.gitconfig. That set is closed; see the per-machine guards below.
+#   - The rest are merge commits GitHub composed. `b33f0a2` (PR #77, 2026-08-01) was
+#     the first: both its parents are authored jim.galasyn@hotmail.com, and GitHub
+#     wrote the merge commit using the account's PRIMARY email. No git config on any
+#     machine could have prevented it.
+#
+# That second set GROWS BY ONE PER MERGED PR, which is why no total is written here —
+# any number would be stale by the next merge, and this comment has already shipped
+# stale counts twice. Recompute:
+#   git log --format='%ae' | grep -c confluent
+#
+# The second cause is not squash-specific — it fires on merge commits as well as
+# squash merges — and it is LIVE: that firing is more recent than every other on
+# record. A LOCAL merge (`git merge --no-ff` then push) is authored from your own
+# config and avoids it, but NOT on this repo: the ruleset requires code-scanning
+# results for the pushed commit, and a locally-made merge commit can never obtain them
+# because GitHub cannot scan a commit it has never seen. Here the PR path, and the
+# re-attribution, are forced. Expect this count to grow by one per merged PR.
+#
+# The affected commits are already pushed, so a mailmap is used rather than a history
+# rewrite: rewriting would change every SHA from the first affected commit forward and
+# break existing clones, to remove an address that remains recoverable from GitHub's
+# event history regardless.
+#
+# For the FIRST cause, the reason this comment used to give for why it cannot recur —
+# a repo-local user.email — is wrong: this repo has never carried one. The guard lives
+# in each machine's ~/.gitconfig, and it is NOT the same on every machine:
 #
 #   - work machine: a conditional include keyed on the REMOTE URL, so the personal
 #     identity attaches to any clone of this repo anywhere on disk —
