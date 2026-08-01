@@ -20,6 +20,14 @@ Quick start
     a, b = hopf_link_curves()
     gauss_linking_number(a, b)          # -1.000010280927496
 
+This example previously used `nwt_substrate.diagrams` / `.topology`.  That form
+WORKS -- nwt-substrate is on PyPI and is this package's optional `oracle` extra,
+and it returns the same value to the last digit.  It was changed only because a
+package's own Quick start should not require an optional dependency, and because
+`gauss_linking_number` is defined right here.  The two engines agreeing on this
+number is a real result, and it is gated by `tests/test_oracle_equivalence.py`
+rather than by a docstring.
+
 References
 ----------
 Gauss (1833), the linking integral.  Milnor, "Isotopy of links" (1957) for the
