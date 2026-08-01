@@ -4,7 +4,7 @@ linking matrix, Borromean reference rings, Milnor (Massey/Borromean)
 indeterminacy, and rotational link symmetry.
 
 These are pure-geometry measurements on point-sampled closed curves in R^3 --
-the kind of curves `diagrams.torus_knot_curve` and `diagrams.hopf_link_curves`
+the kind of curves `curves.torus_knot_curve` and `curves.hopf_link_curves`
 produce.  They are the numeric primitive for "binding = Hopf linking of
 linked-solitons picture: e.g. two loops joined by a single Hopf clasp
 (lk = -1), and the alpha particle is four trefoils at a tetrahedron with every
@@ -15,10 +15,10 @@ compendium library can build particle and nucleus pictures on top of it.
 
 Quick start
 -----------
-    from nwt_substrate.diagrams import hopf_link_curves
-    from nwt_substrate.topology import gauss_linking_number
+    from jax_solitons.invariants.curves import hopf_link_curves
+    from jax_solitons.invariants.linking_invariants import gauss_linking_number
     a, b = hopf_link_curves()
-    gauss_linking_number(a, b)          # ~ +/-1
+    gauss_linking_number(a, b)          # -1.000010280927496
 
 References
 ----------
