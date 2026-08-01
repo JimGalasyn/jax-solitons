@@ -74,10 +74,17 @@ a new solver).
 
 ## Calibration result (2026-06-24) — ✅ the method RECOVERS the known B=2 binding
 
-The B=2 binding calibration **succeeds**: a resolution ladder
-(`simulations/engine_dogfood/skyrme_converge_*` in null-worldtube, Vast farm)
-recovers the published classical massless binding **~4.3%** (per-baryon energy
-1.232 → 1.179 in Bogomolny-bound units) as dx → 0:
+The B=2 binding calibration **succeeds**: a resolution ladder (Vast farm) recovers the
+published classical massless binding **~4.3%** (per-baryon energy 1.232 → 1.179 in
+Bogomolny-bound units) as dx → 0:
+
+> The evidence is in this repo. The run manifests are
+> [`skyrme_calibration/`](skyrme_calibration/) and the drivers are
+> [`../scripts/skyrme_converge/`](../scripts/skyrme_converge/); the table below is
+> reproduced from them by
+> `python scripts/skyrme_converge/skyrme_converge_analyze.py docs/skyrme_calibration/N*.json`.
+> Both were migrated on 2026-08-01 out of `null-worldtube-private`, where the manifests
+> were never tracked in git and the repo is being retired.
 
 | N | dx | E(B=1)/bound | E(B=2)/bound | binding | physical |
 |---|---|---|---|---|---|
