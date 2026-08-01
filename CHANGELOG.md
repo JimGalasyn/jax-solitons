@@ -7,6 +7,33 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+- **`jax_solitons.ehn`** — the Eto-Hamada-Nitta gauged two-scalar engine, migrated out
+  of the deprecated `null-worldtube-private` per its `EXTRACTION_DECISIONS.md`
+  (2026-07-29). Four modules (`relax`, `energy`, `knot_batch`, `cross_linking`) plus a
+  new top-level `jax_solitons.vortex_topology`. Purely additive — no existing module
+  changed. Submodules load lazily (PEP 562), so importing the subpackage does not pull
+  in JAX and `python -m jax_solitons.ehn.relax` does not double-import.
+
+  It adds the T(p,q) torus-knot seed the published `examples/ehn_knot_soliton.py`
+  cannot produce, which is what yielded a held trefoil T(2,3) at N_link = 3 — below the
+  floor EHN report — plus T(2,5), T(2,7), T(3,4) and T(3,5). The example and the module
+  coexist deliberately; see the package docstring.
+
+  Acceptance was bit-reproducibility of the N=96 quick battery, the physics being
+  deterministic. Five of six quantities reproduced exactly (`lk` on both arms to 17
+  digits, determinants, segment counts, total energy); `Q` differs by ~1 ULP, which is
+  a GPU sum reduction with unpinned accumulation order. Recorded rather than rounded
+  away, because the gate said bit-for-bit. **That evidence is not yet encoded as a
+  test** — no test in this repo exercises `ehn` or `vortex_topology`.
+
+### Known
+- `invariants.linking_invariants.gauss_linking_number` and `vortex_topology._gauss`
+  both evaluate the Gauss double integral, on different input representations (closed
+  curves vs. skeleton points + tangents, the latter with a softening term and `dx²`
+  weighting). A shared core is a real candidate, deferred deliberately: changing it
+  changes numerics and would void the bit-for-bit gate the migration rests on.
+
 ## [0.0.8] - 2026-07-17
 
 ### Changed
