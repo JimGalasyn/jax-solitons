@@ -25,6 +25,31 @@ Nothing below is edited. Two notes on reading it now:
     commits that existed on no remote. Its claim that "push is blocked by policy
     on every remote, so a human has to do it" was true of the machine it was
     written on and not of Bender.
+
+WHERE THE FILES IT NAMES LIVE NOW. The body cites them at their 2026-07-29
+locations; this table is the translation, so a reader does not chase paths into a
+repo that is going away. The body itself is unedited.
+
+  ehn_relax.py, ehn_energy.py, ehn_knot_batch.py, ehn_cross_linking.py
+        -> jax_solitons/ehn/{relax,energy,knot_batch,cross_linking}.py  (#77)
+  simulations/gpe_vortex_topology.py
+        -> jax_solitons/vortex_topology.py                              (#77)
+  standard_box.py, particle_catalog.py, chamber.py
+        -> soliton-playground src/soliton_playground/ehn_lab/
+  compose_pair.py
+        -> soliton-playground experiments/compose_pair.py
+  BESTIARY.md
+        -> soliton-playground docs/BESTIARY.md
+
+  gauged_relaxer/core_knot_id.py  NOT migrated. Its knot identification was
+        superseded by jax_solitons.knots.identify_knot, which
+        vortex_topology.knot_determinants now calls; its core_curves_from_n and
+        curve_energy_scores have no equivalent here.
+  run_ehn_relax_fleet.py, vu_confirm.py, papers/numerical_methods_outline.md
+        NOT migrated -- still only in null-worldtube-private.
+
+  build_db_v21a.py, cited from COMPENDIUM.md, is in null-worldtube (a DIFFERENT
+        repo, not the one being retired) and is safe there.
 -->
 
 # Extraction decisions (2026-07-29)
