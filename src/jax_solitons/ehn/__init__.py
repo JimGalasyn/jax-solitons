@@ -19,7 +19,8 @@ must not be merged:
               those states.
 
 Provenance: moved here from `null-worldtube-private/simulations/engine_dogfood/`
-per that repo's EXTRACTION_DECISIONS.md (2026-07-29), which chose a package module
+per that repo's EXTRACTION_DECISIONS.md (2026-07-29), migrated here 2026-08-01 as
+docs/EXTRACTION_DECISIONS.md since that repo is being retired. It chose a package module
 over an example because the SB-1 battery and the particle catalog both `import`
 the engine, and examples are not importable. The move's acceptance test is
 bit-reproducibility of the N=96 quick battery, since the physics is deterministic:

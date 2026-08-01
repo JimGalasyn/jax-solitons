@@ -28,6 +28,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 - **`jax_solitons.ehn`** — the Eto-Hamada-Nitta gauged two-scalar engine, migrated out
   of the deprecated `null-worldtube-private` per its `EXTRACTION_DECISIONS.md`
+  (migrated here 2026-08-01 as [`docs/EXTRACTION_DECISIONS.md`](docs/EXTRACTION_DECISIONS.md))
   (2026-07-29). Four modules (`relax`, `energy`, `knot_batch`, `cross_linking`) plus a
   new top-level `jax_solitons.vortex_topology`. Purely additive — no existing module
   changed. Submodules load lazily (PEP 562), so importing the subpackage does not pull
