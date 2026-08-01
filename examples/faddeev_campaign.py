@@ -1,6 +1,6 @@
 """Run a small Faddeev hopfion campaign through the registered-run contract.
 
-A runnable example (and a smoke of `jax_solitons.campaign`): relax two
+A runnable example (and a smoke of `run_farm`): relax two
 (n, m) = (1, 1) hopfions in the CP^1 spinor frame, stream each run's
 charge/energy ledger, and trace + capture each relaxed core. Writes a
 config-hashed run directory per run plus a MANIFEST.jsonl registry under
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sys
 
-from jax_solitons.campaign import (
+from run_farm import (
     FileRunRegistry,
     JsonlEventSink,
     LocalExecutor,

@@ -72,5 +72,4 @@ rates. Order of attack:
   (λ=e²/2) convention split. Unblocks the null-worldtube gauged_higgs cleanup.
 - L-BFGS and ETDRK steppers
 - jaxDecomp sharding layer (NamedSharding default + shard_map halo islands)
-- orbax checkpoint backend when sharded arrays land
 - vmap sweep driver over RunConfig batches (the farm front-end)

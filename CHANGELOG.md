@@ -7,6 +7,86 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+- **`jax_solitons.models.skyrme`** — the SU(2)/S³ Skyrme model (`skyrme_model`,
+  `baryon_charge`, `skyrme_energy_density`, `skyrme_bound`, `E0MassTerm`, `E2O4Term`,
+  `E4SkyrmeTerm`, `S3Constraint`), plus Skyrme seeds in `jax_solitons.seeds` and
+  `docs/SKYRME.md`. Baryon number is exact and probe-independent.
+
+  Validated against the literature rather than against itself: a resolution ladder
+  (N=64→160, dx 0.250→0.100) recovers the published classical massless Skyrme **B=2
+  binding of ~4.3%**, bracketing it from 3.91% to 4.58% as dx→0, with every leg above
+  the Bogomolny bound and B held at +1/+2. Nine tests cover baryon-charge integrality,
+  hedgehog B=+1, rational-map degree, translation/O(4)/SO(4) invariance, the S³
+  constraint algebra, and the bound.
+
+  This supersedes an earlier reading from the same work that the binding sat below the
+  resolution floor. That was two bugs, both named in `docs/SKYRME.md`: a box too small
+  for the soliton (c4=4 put r0*~4 beyond L/2), and fixed-lr Adam never settling. The
+  conclusion flipped once the box fit and the relaxer settled — so the method can
+  resolve a real binding to ~0.1%.
+
+- **`jax_solitons.ehn`** — the Eto-Hamada-Nitta gauged two-scalar engine, migrated out
+  of the deprecated `null-worldtube-private` per its `EXTRACTION_DECISIONS.md`
+  (2026-07-29). Four modules (`relax`, `energy`, `knot_batch`, `cross_linking`) plus a
+  new top-level `jax_solitons.vortex_topology`. Purely additive — no existing module
+  changed. Submodules load lazily (PEP 562), so importing the subpackage does not pull
+  in JAX and `python -m jax_solitons.ehn.relax` does not double-import.
+
+  It adds the T(p,q) torus-knot seed the published `examples/ehn_knot_soliton.py`
+  cannot produce, which is what yielded a held trefoil T(2,3) at N_link = 3 — below the
+  floor EHN report — plus T(2,5), T(2,7), T(3,4) and T(3,5). The example and the module
+  coexist deliberately; see the package docstring.
+
+  Acceptance was bit-reproducibility of the N=96 quick battery, the physics being
+  deterministic. Five of six quantities reproduced exactly (`lk` on both arms to 17
+  digits, determinants, segment counts, total energy); `Q` differs by ~1 ULP, which is
+  a GPU sum reduction with unpinned accumulation order. Recorded rather than rounded
+  away, because the gate said bit-for-bit. **That evidence is not yet encoded as a
+  test** — no test in this repo exercises `ehn` or `vortex_topology`.
+
+### Known
+- `invariants.linking_invariants.gauss_linking_number` and `vortex_topology._gauss`
+  both evaluate the Gauss double integral, on different input representations (closed
+  curves vs. skeleton points + tangents, the latter with a softening term and `dx²`
+  weighting). A shared core is a real candidate, deferred deliberately: changing it
+  changes numerics and would void the bit-for-bit gate the migration rests on.
+
+## [0.0.8] - 2026-07-17
+
+### Changed
+- **The campaign / GPU-farming layer was extracted to
+  [run-farm](https://github.com/JimGalasyn/run-farm)** (a new dependency,
+  `run-farm>=0.1.1`). `src/jax_solitons/campaign/` and its ~200 tests are gone; the
+  physics-agnostic A/B/C/D/E/F contract, the restartable-run helpers from `runs.py`
+  (`save_checkpoint`/`load_checkpoint`/`run_dir`), and the Vast/RunPod/Modal brokers
+  now live in run-farm. This honors the rule-of-three gate CAMPAIGN.md set: the
+  A/B/C/E API stabilized (the Provider seam absorbed three backends with zero
+  changes), with jax-morpho's evolution loop the near-future second consumer.
+- **What stays:** `RunConfig` (byte-stable — it names every run directory ever
+  written, and structurally satisfies `run_farm.RunConfig`), the `faddeev_relax_then_id`
+  RunFn, the new `jax_solitons.farm_config.soliton_leg_to_config` factory, and
+  `tests/test_campaign.py` as the downstream integration test. Existing
+  `from jax_solitons.campaign import ...` call sites become `from run_farm import ...`;
+  `jax_solitons.runs` re-exports the moved checkpoint helpers so its own API is stable.
+
+## [0.0.7] - 2026-07-15
+
+### Added
+- **Knot/link invariants** (#66) — a new `jax_solitons.invariants` subpackage
+  extracted from the retired nwt-substrate: colored Jones polynomials, Gauss
+  linking integrals, and torus-knot constructions, plus an `event_graph`
+  helper. Characterizes vortex-knot / hopfion topology.
+
+### Changed
+- **Campaign SSH liveness** (#54) — `ServerAliveInterval` on compute-phase
+  ssh/scp so a host that dies mid-command is detected instead of hanging
+  silently (#43 part 1).
+
+### Fixed
+- **Flaky O(3) invariance test** (#53) — run the Tier-1 exactness suite in
+  float64 so the exact identities aren't subject to float32 platform drift.
+
 ## [0.0.5] - 2026-06-19
 
 ### Added

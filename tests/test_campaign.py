@@ -1,12 +1,16 @@
-"""The campaign contract, exercised end-to-end on a real physics RunFn.
+"""The run-farm campaign contract, exercised end-to-end on a real physics RunFn.
 
-Proves the boundary closes: the Faddeev relax-then-ID pipeline (runfns.py),
-driven through run_campaign over the local reference backends, produces the
-registered/streamed/triggered artifacts the contract promises (A/B/C/E), and
-the optimizer-state resume is bit-identical (B, P4).
+The downstream integration test after the campaign layer was extracted to run-farm:
+it proves the boundary still closes across the package seam -- the Faddeev
+relax-then-ID pipeline (runfns.py), driven through `run_farm.run_campaign` over the
+local reference backends, produces the registered/streamed/triggered artifacts the
+A/B/C contract promises, and the optimizer-state resume is bit-identical (B, P4).
+
+The physics-free E/F contract tests (admission, FakeProvider teardown/failover) now
+live in run-farm's own tests/test_admission.py; what stays here is exactly the part
+that needs a real engine.
 """
 
-import contextlib
 import json
 
 import jax
@@ -16,22 +20,14 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-from jax_solitons.campaign import (  # noqa: E402
-    AdmissionError,
+from run_farm import (  # noqa: E402
     FileRunRegistry,
-    HostProbeFailed,
-    HostSpec,
     JsonlEventSink,
-    LaunchSpec,
     LocalExecutor,
-    Offer,
     ProbeAdmission,
-    Provider,
-    RentedHost,
     run_campaign,
 )
-from jax_solitons.campaign.protocols import RunContext  # noqa: E402
-from jax_solitons.campaign.reference import HostReport  # noqa: E402
+from run_farm.protocols import RunContext  # noqa: E402
 from jax_solitons.models.faddeev import faddeev_cp1_model  # noqa: E402
 from jax_solitons.runfns import faddeev_relax_then_id  # noqa: E402
 from jax_solitons.runs import RunConfig, load_checkpoint  # noqa: E402
@@ -177,22 +173,6 @@ def test_adam_resume_bit_identical():
     assert np.array_equal(np.asarray(z_full), np.asarray(z_b))
 
 
-def test_admission_probe_or_bail():
-    """E (P9): admission rejects a host that cannot ship results, and passes a
-    healthy one — independent of the CI host's real hardware."""
-    adm = ProbeAdmission(min_mem_gb=4.0, min_mbps=1.0)
-
-    bad = HostReport(has_gpu=True, device_name="x", free_mem_gb=8.0,
-                     outbound_mbps=0.0)            # zero outbound — the case study
-    good = HostReport(has_gpu=True, device_name="x", free_mem_gb=8.0,
-                      outbound_mbps=100.0)
-    adm.probe = lambda: bad
-    with pytest.raises(AdmissionError):
-        adm.guard()
-    adm.probe = lambda: good
-    assert adm.guard().outbound_mbps == 100.0
-
-
 def test_campaign_step_count_exact(tmp_path):
     """#4 provenance: when steps isn't divisible by segments, the executed
     steps still sum to exactly config.steps (the remainder is distributed, not
@@ -231,187 +211,3 @@ def test_adam_observer_global_step():
     assert seen == [0, 2, 4, 4, 6, 8]        # monotone & global across the resume
 
 
-def test_admission_rejects_failed_probe():
-    """E (P9): a host whose probe FAILED (probe_ok=False) is a hard reject even
-    with require_gpu=False — never 'runs anyway' on an unprobed host. Without
-    the fix, require_gpu=False would bypass the GPU/mem gates and admit it."""
-    adm = ProbeAdmission(require_gpu=False, min_mem_gb=0.0, min_mbps=0.0)
-    adm.probe = lambda: HostReport(
-        has_gpu=False, device_name="probe-failed: boom", free_mem_gb=0.0,
-        outbound_mbps=float("inf"), probe_ok=False)
-    with pytest.raises(AdmissionError):
-        adm.guard()
-
-
-def test_admission_device_probe_paths(monkeypatch):
-    """E: _device reads free memory from a GPU's memory_stats, and treats an
-    UNREADABLE capacity as UNKNOWN (+inf), not 0 — so a healthy GPU is never
-    falsely rejected. Both 'unknown' routes are covered: a present-but-empty
-    memory_stats (missing keys) and a device with no memory_stats attribute at
-    all (the getattr fallback)."""
-    import jax
-
-    class FakeDev:                       # has memory_stats(); returns given dict
-        platform = "gpu"
-        device_kind = "FakeGPU"
-        def __init__(self, stats): self._stats = stats
-        def memory_stats(self): return self._stats
-
-    class FakeDevNoStats:                 # no memory_stats attribute at all
-        platform = "gpu"
-        device_kind = "FakeGPU-nostats"
-
-    # GPU reporting stats: 10 - 2 = 8 GB free.
-    monkeypatch.setattr(jax, "devices", lambda: [FakeDev(
-        {"bytes_limit": 10_000_000_000, "bytes_in_use": 2_000_000_000})])
-    r = ProbeAdmission(min_mem_gb=4.0).probe()
-    assert r.has_gpu and r.probe_ok and abs(r.free_mem_gb - 8.0) < 0.1
-    ProbeAdmission(min_mem_gb=4.0).guard()            # admits: 8 GB >= 4
-
-    # memory_stats present but EMPTY (no bytes_limit key): UNKNOWN -> +inf.
-    monkeypatch.setattr(jax, "devices", lambda: [FakeDev({})])
-    r2 = ProbeAdmission(min_mem_gb=4.0).probe()
-    assert r2.has_gpu and r2.free_mem_gb == float("inf")
-    ProbeAdmission(min_mem_gb=4.0).guard()            # admits: unknown != blocked
-
-    # NO memory_stats attribute: getattr fallback -> {} -> UNKNOWN -> +inf.
-    monkeypatch.setattr(jax, "devices", lambda: [FakeDevNoStats()])
-    r3 = ProbeAdmission(min_mem_gb=4.0).probe()
-    assert r3.has_gpu and r3.free_mem_gb == float("inf")
-    ProbeAdmission(min_mem_gb=4.0).guard()
-
-
-def test_admission_probe_exception_is_hard_reject(monkeypatch):
-    """E (P9): if the device query itself throws, _device reports probe_ok=False
-    and guard() hard-rejects — even with require_gpu=False."""
-    import jax
-    def boom():
-        raise RuntimeError("no driver")
-    monkeypatch.setattr(jax, "devices", boom)
-    r = ProbeAdmission(require_gpu=False).probe()
-    assert r.probe_ok is False and r.device_name.startswith("probe-failed")
-    with pytest.raises(AdmissionError):
-        ProbeAdmission(require_gpu=False).guard()
-
-
-# ---------------------------------------------------------------- F (P9, P10) --
-def _offer(oid, *, dph=0.12, rel=0.99, cuda=12.4):
-    return Offer(id=oid, dph=dph, gpu_name="RTX 3090", num_gpus=1,
-                 reliability=rel, inet_down_mbps=800.0, cuda_max=cuda,
-                 geolocation="Nowhere", provider="fake")
-
-
-class FakeProvider:
-    """In-memory `Provider` for contract tests: no network, no spend.
-
-    Tracks a `live` set so a test can assert the leak-proof teardown actually
-    fired, and `created` to count rental attempts. `bad_ids` come up as failed
-    hosts (HostProbeFailed) — the P9 'host lies' case the executor fails over.
-    """
-
-    name = "fake"
-
-    def __init__(self, offers, bad_ids=()):
-        self._offers = list(offers)
-        self._bad = set(bad_ids)
-        self.live: set[str] = set()       # instances currently rented (==0 ⇒ no leak)
-        self.created: list[str] = []      # every instance ever created
-        self._n = 0
-
-    def offers(self, spec: HostSpec) -> list[Offer]:
-        return sorted(
-            (o for o in self._offers
-             if o.dph <= spec.max_dph and o.reliability >= spec.min_reliability
-             and o.cuda_max >= spec.min_cuda and o.gpu_name == spec.gpu_name),
-            key=lambda o: o.dph)
-
-    @contextlib.contextmanager
-    def rent(self, offer: Offer, launch: LaunchSpec, *, timeout_s: float = 600):
-        iid = f"inst-{self._n}"
-        self._n += 1
-        self.created.append(iid)
-        self.live.add(iid)                # meter "on"
-        try:
-            if offer.id in self._bad:
-                raise HostProbeFailed(f"fake bad host {offer.id}")
-            yield RentedHost(id=iid, ssh_host="fake.host", ssh_port=22,
-                             offer=offer)
-        finally:
-            self.live.discard(iid)        # GUARANTEED teardown — the F invariant
-
-
-_SPEC = HostSpec(gpu_name="RTX 3090", max_dph=0.30, min_reliability=0.95,
-                 min_cuda=12.2)
-_LAUNCH = LaunchSpec(image="img:12.2", onstart="echo hi", disk_gb=24.0)
-
-
-def test_fake_provider_satisfies_protocol():
-    """A FakeProvider structurally IS a Provider (the contract is duck-typed)."""
-    assert isinstance(FakeProvider([]), Provider)
-
-
-def test_provider_offers_filter_and_order():
-    """F discovery: offers() honours the HostSpec bar and returns cheapest-first.
-    The min_cuda gate (P10) drops a host whose driver is older than the image."""
-    fake = FakeProvider([
-        _offer("cheap-but-old", dph=0.08, cuda=12.0),   # dropped: cuda < 12.2
-        _offer("pricey", dph=0.25),
-        _offer("cheap-ok", dph=0.10),
-        _offer("too-dear", dph=0.40),                   # dropped: dph > max
-    ])
-    got = [o.id for o in fake.offers(_SPEC)]
-    assert got == ["cheap-ok", "pricey"]                # filtered + sorted by dph
-
-
-def test_rent_yields_host_and_tears_down():
-    """F invariant: rent yields a reachable RentedHost and the meter is off
-    after the block — no leak on the happy path."""
-    fake = FakeProvider([_offer("a")])
-    (off,) = fake.offers(_SPEC)
-    with fake.rent(off, _LAUNCH) as host:
-        assert isinstance(host, RentedHost)
-        assert host.ssh_host == "fake.host" and host.offer.id == "a"
-        assert fake.live == {host.id}                   # metered while inside
-    assert fake.live == set()                           # torn down on exit
-
-
-def test_rent_tears_down_on_exception():
-    """F invariant: teardown fires even when the body raises — a crashed run
-    never leaks a billing GPU."""
-    fake = FakeProvider([_offer("a")])
-    (off,) = fake.offers(_SPEC)
-    with pytest.raises(ValueError):
-        with fake.rent(off, _LAUNCH):
-            raise ValueError("run blew up")
-    assert fake.live == set()                           # still torn down
-
-
-def test_rent_bad_host_raises_and_tears_down():
-    """F + P9: a host that fails to come up raises HostProbeFailed (the failover
-    signal) AND is still torn down."""
-    fake = FakeProvider([_offer("bad")], bad_ids={"bad"})
-    (off,) = fake.offers(_SPEC)
-    with pytest.raises(HostProbeFailed):
-        with fake.rent(off, _LAUNCH):
-            pass
-    assert fake.live == set()                           # bad host torn down too
-
-
-def test_provider_failover_pattern():
-    """The idiom a ProviderExecutor (Phase 2/D) will use over any Provider: try
-    offers cheapest-first, HostProbeFailed -> next, with teardown guaranteed on
-    every attempt. Proves the F contract supports failover without leaking."""
-    fake = FakeProvider(
-        [_offer("a", dph=0.10), _offer("b", dph=0.11), _offer("c", dph=0.12)],
-        bad_ids={"a", "b"})                              # two bad, cheapest-first
-    ran = None
-    for off in fake.offers(_SPEC):
-        try:
-            with fake.rent(off, _LAUNCH) as host:
-                ran = host.offer.id
-                break
-        except HostProbeFailed:
-            continue
-    assert ran == "c"                                    # failed over past a, b
-    assert fake.live == set()                            # nothing left billing
-    assert fake.created == ["inst-0", "inst-1", "inst-2"]  # all 3 attempted+down
