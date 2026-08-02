@@ -70,6 +70,20 @@ oracle = [
 sharding = [
   "jaxdecomp>=0.3",  # distributed 3D FFT + halo exchange
 ]
+viz = [
+  # Field portraits: scripts/portraits/ renders relaxed EHN states four ways
+  # (marching-cubes isosurface, RMF twist tube, E-field, B-field). None of this is
+  # needed to run the physics, so it stays optional.
+  "scikit-image>=0.22",  # marching_cubes for the isosurfaces
+  "imageio>=2.31",       # GIF output for the turntable animations
+  "matplotlib>=3.8",     # 3D axes and ribbons
+  # nwt-substrate supplies the OPEN-BC Poisson solver, which is what lets a net
+  # charge be drawn honestly (monopole lines escape rather than wrapping). Without
+  # it the renderer falls back to periodic BC and says so on the figure, so this
+  # is a real optional rather than a hidden requirement -- see the `oracle` extra,
+  # which pins the same package for the equivalence gate.
+  "nwt-substrate==0.5.0",
+]
 # The campaign layer moved to run-farm (2026-07): its Vast broker, the modal
 # executor, and the Orbax checkpoint roadmap now live there. Depend on run-farm
 # (base deps) for the campaign; its own extras (`modal`, `s3`) cover the rest.
