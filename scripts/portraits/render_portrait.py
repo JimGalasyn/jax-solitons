@@ -8,7 +8,8 @@ Four ways to look at the SAME relaxed field, so no single view can hide a cheat:
   twist  — φ₁ core-line (spline-smoothed) swept as a clean rotation-minimizing-frame
            tube, painted by the field phase arg(φ₁). The RMF carries NO twist of its
            own, so any spiral of colour along the loop is the REAL framing twist
-           (Călugăreanu Tw). Faint φ₂ ring kept in: ring ⟹ neutron, no ring ⟹ proton.
+           (Călugăreanu Tw). Faint φ₂ ring kept in: its presence or absence is the
+           structural difference between the two framings this file contrasts.
   efield — E = −∇A₀ : field lines traced from a seed shell, warm ribbons; faint knot.
   bfield — B = ∇×A  : field lines threading the flux loops, cool ribbons; faint knot.
 
@@ -17,6 +18,34 @@ parent simulations/ dir; this script lives with the ehn fields in engine_dogfood
 
   python render_portrait.py --field out_trefoil_twist1_n192 --view all
 """
+
+# ---------------------------------------------------------------------------
+# CAPTIONS RELABELLED 2026-08-02, recorded so the change is auditable.
+#
+# Six places described a STRUCTURAL distinction using particle names -- "ring =>
+# neutron, no ring => proton", "WHY the neutron is neutral but the proton isn't",
+# panel titles "neutron (m-t)" / "proton (m+t)". What the code computes is the
+# framing-charge model: a topological core m and a framing skin t, combined as
+# m-t (nets ~zero -> dipole, loops close) or m+t (Q>0 -> monopole, lines escape).
+# The captions now say that, which is also what the figures actually show.
+#
+# The mapping, kept rather than dropped, since suppressing a rename is how a
+# naming history stops being auditable:
+#
+#     ring => neutron / no ring => proton  ->  ring present or absent
+#     "the neutron is neutral..."          ->  "one framing nets zero charge..."
+#     baryon-core m                        ->  topological core m
+#     panels "neutron"/"proton"            ->  panels "m-t"/"m+t"
+#     "the proton's k=0 monopole"          ->  "the net-charge k=0 monopole"
+#
+# THE PHYSICS IS UNTOUCHED -- verified by parsing this file and the pre-relabel
+# original and comparing the AST with every string literal blanked: identical.
+# Only captions and comments differ.
+#
+# Scope: this file only. `nwt_surface_current_portraits` keeps `sector="lepton"`
+# and its mass table, because there the knot<->sector correspondence IS the
+# subject rather than a label on a structure -- see COMPENDIUM.md.
+# ---------------------------------------------------------------------------
 import argparse
 import json
 import os
@@ -211,7 +240,8 @@ def view_twist(F, npol=30, rad_cells=2.2):
     if ring is not None:
         parts.append(ring)
     parts.append(_phase_tube_parts(core, F, rad_cells, npol))
-    return parts, "twist: φ₁ core tube painted by arg(φ₁) on an RMF frame — colour spiral = real Tw; faint φ₂ ring ⟹ neutron"
+    return parts, ("twist: φ₁ core tube painted by arg(φ₁) on an RMF frame — "
+                   "colour spiral = real Tw; faint φ₂ ring shown when present")
 
 
 def _carrier_parts(F, core):
@@ -304,26 +334,27 @@ def render_triptych(fdir, out, elev, azim, dpi):
 
 
 def render_charge(fdir, out, elev, azim, dpi, zoom=1.3):
-    """Charge-structure portrait: WHY the neutron is neutral but the proton isn't.
-    Framing-charge model = baryon-core m(=1−|φ₁|²) ± framing-skin t(=|φ₁|²(1−|φ₁|²)),
-    normalised so the neutron nets zero. Core/skin as SEPARATE isosurfaces (trefoil
-    core always visible): core = red (+), skin translucent — blue (−) neutron / red
-    (+) proton. Uses the OPEN-BC Poisson solver so a net charge is represented
-    honestly: neutron = dipole (loops CLOSE near the object), proton = monopole
-    (lines ESCAPE). zoom>1 pulls the camera + trace out to show the far field."""
+    """Charge-structure portrait: WHY one framing nets zero charge and the other
+    does not. Framing-charge model = topological core m(=1−|φ₁|²) ± framing-skin
+    t(=|φ₁|²(1−|φ₁|²)), normalised so the m−t combination nets zero. Core/skin as
+    SEPARATE isosurfaces (trefoil core always visible): core = red (+), skin
+    translucent — blue (−) for m−t, red (+) for m+t. Uses the OPEN-BC Poisson
+    solver so a net charge is represented honestly: m−t = dipole (loops CLOSE near
+    the object), m+t = monopole (lines ESCAPE). zoom>1 pulls the camera + trace out
+    to show the far field."""
     F = load_field(fdir); N, L, dx = F["N"], F["L"], F["dx"]; g = _grid1d(N, L)
     center, half = _knot_box(core_curve(F["p1"], N, dx), L); view = _view_dir(elev, azim)
-    try:                                          # open BC keeps the proton's k=0 monopole
+    try:                                          # open BC keeps the net-charge k=0 monopole
         from nwt_substrate import em as _sub_em
         efield = lambda rho: _sub_em.electric_field(rho, dx, bc="open"); bc = "open-BC"
     except Exception:
         efield = lambda rho: electric_field(rho, dx); bc = "periodic-BC"
     p2 = np.abs(F["p1"]) ** 2
-    m = np.clip(1.0 - p2, 0, None)               # +baryon core (thin trefoil, |φ₁|→0)
+    m = np.clip(1.0 - p2, 0, None)               # +topological core (thin trefoil, |φ₁|→0)
     t = np.clip(p2 * (1.0 - p2), 0, None)        # framing skin shell (|φ₁|²≈½, larger radius)
     mn = m / (m.sum() + 1e-12); tn = t / (t.sum() + 1e-12)
-    panels = [("neutron  (m−t):  +core / −skin  →  Q≈0  →  DIPOLE, loops close", -1),
-              ("proton  (m+t):  +core & +skin  →  Q>0  →  MONOPOLE, lines escape", +1)]
+    panels = [("m−t:  +core / −skin  →  Q≈0  →  DIPOLE, loops close", -1),
+              ("m+t:  +core & +skin  →  Q>0  →  MONOPOLE, lines escape", +1)]
     span = half * zoom
     fig = plt.figure(figsize=(14.0, 6.8))
     for i, (title, sgn) in enumerate(panels):
