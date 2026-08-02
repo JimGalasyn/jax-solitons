@@ -431,6 +431,29 @@ def _load_field(path):
     return u, jnp.asarray(d["s"]), w, int(d["n"])
 
 
+def _seed_params(geom, tp, tq, R, rminor, twist):
+    """The seed fields the manifest must carry to identify which IC produced a state.
+
+    Without these, `--geom rings --nlink 3` and `--geom torus --tp 2 --tq 3` write
+    BYTE-IDENTICAL params: the torus branch sets nlink = tq, so both record
+    nlink=3 and nothing else distinguishes them. Those are different physics --
+    rings threads nlink separate phi1 loops on the phi2 ring (EHN's IC), torus
+    winds a SINGLE phi1 curve p times round and q times through -- and the held
+    T(2,3) trefoil at N_link=3 exists only on the torus branch. A stored state
+    whose manifest cannot say which IC produced it cannot be reproduced from its
+    manifest, which is the manifest's whole job.
+
+    Found 2026-08-02 trying to re-derive the trefoil's seed from field_store: the
+    recorded params were consistent with either.
+    """
+    p = {"geom": geom, "R": float(R)}
+    if geom == "torus":
+        p.update({"tp": int(tp), "tq": int(tq), "twist": int(twist),
+                  "rminor": (float(rminor) if rminor is not None
+                             else round(0.45 * float(R), 6))})
+    return p
+
+
 def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
         C=400.0, U=50.0, eps_a=0.05, alpha=4e-4, beta=2e-3, q1=1.0, q2=0.0,
         steps=40000, samples=40, n_ic=400, ic="london", cramp=0, agrad="bilinear",
@@ -508,7 +531,8 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
             _atomic_write(outp / "manifest.json", lambda f: f.write(json.dumps(
                 {"params": {"N": N, "L": L, "nlink": nlink, "C": C, "alpha": alpha,
                             "beta": beta, "U": U, "ic": ic, "cramp": cramp,
-                            "agrad": agrad},
+                            "agrad": agrad, **_seed_params(geom, tp, tq, R,
+                                                           rminor, twist)},
                  "floor": floor, "traj": traj,
                  "wall_s": time.time() - t0}, indent=1).encode()))
         if save_every and n % save_every == 0 and n > n_start:
@@ -530,7 +554,8 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
         print(f"  (cross-linking skipped: {e})")
     _atomic_write(outp / "manifest.json", lambda f: f.write(json.dumps(
         {"params": {"N": N, "L": L, "nlink": nlink, "C": C, "alpha": alpha,
-                    "beta": beta, "U": U, "ic": ic, "cramp": cramp, "agrad": agrad},
+                    "beta": beta, "U": U, "ic": ic, "cramp": cramp, "agrad": agrad,
+                    **_seed_params(geom, tp, tq, R, rminor, twist)},
          "floor": floor, "traj": traj, "wall_s": time.time() - t0,
          "cross_lk": cross_lk}, indent=1).encode()))
     print(f"  FINAL E={E['total']:.1f} (EHN≈{ehn_ref}) link={E['link']/floor*100:+.0f}% "
