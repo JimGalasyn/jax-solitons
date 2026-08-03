@@ -78,3 +78,42 @@ def test_resume_without_usable_provenance_records_nothing_not_a_guess(tmp_path, 
     assert seed["seed_provenance"] == "unavailable"
     assert "R" not in seed, "invented a radius from the CLI default"
     assert seed["resumed_from"].endswith("field.npz")
+
+
+# --- end-to-end -----------------------------------------------------------
+# The unit tests above pin the helpers; these pin the CALL SITES in run(),
+# which is where the regression actually lived — _seed_params was correct and
+# was simply being handed argv on a path that builds no IC. N=8 runs in well
+# under a second on CPU, so this is cheap enough to keep in the default suite.
+
+def test_run_carries_seed_across_a_real_resume(tmp_path):
+    """The exact shape standard_box uses: resume with NO seed flags at all."""
+    from jax_solitons.ehn.relax import run
+    a, b = tmp_path / "a", tmp_path / "b"
+    run(N=8, L=6.4, R=1.5, geom="torus", tp=2, tq=3,
+        steps=2, samples=2, save_every=2, out=str(a))
+    seeded = json.loads((a / "manifest.json").read_text())["params"]
+    assert (seeded["geom"], seeded["tp"], seeded["tq"], seeded["nlink"]) \
+        == ("torus", 2, 3, 3)
+
+    # No --geom/--tp/--tq/--R, exactly as _relax_cmd invokes a resume.
+    run(N=8, L=6.4, steps=4, samples=2,
+        resume=str(a / "field.npz"), out=str(b))
+    resumed = json.loads((b / "manifest.json").read_text())["params"]
+
+    assert resumed["geom"] == "torus", "fell back to the rings default"
+    assert resumed["R"] == pytest.approx(1.5), "filed the R=14.0 default"
+    assert resumed["nlink"] == 3, "floor would come from nlink=4"
+    assert resumed["seed_provenance"] == "carried-forward"
+
+
+def test_run_records_the_functional_parameters(tmp_path):
+    """Seed geometry alone does not reproduce a state; these must be there too."""
+    from jax_solitons.ehn.relax import run
+    out = tmp_path / "a"
+    run(N=8, L=6.4, R=1.5, geom="torus", tp=2, tq=3,
+        steps=2, samples=2, out=str(out))
+    params = json.loads((out / "manifest.json").read_text())["params"]
+    for k in ("lam", "kappa", "eps_a", "q1", "q2", "c4", "core", "n_ic",
+              "N", "L", "C", "alpha", "beta", "U", "ic", "cramp", "agrad"):
+        assert k in params, f"{k} missing — manifest cannot reproduce its state"
