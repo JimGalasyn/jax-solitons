@@ -566,7 +566,16 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
             # (feeds the ECS recorder's P-odd ledger offline; default 0 = off, zero
             # behavior change for existing campaigns).
             want_topo = bool(topo_every) and (n // every) % topo_every == 0
-            want_det = bool(det_every) and (n // every) % det_every == 0
+            # A DIVERGED FIELD HAS NO KNOT TYPE, and recording one anyway is worse
+            # than recording nothing. Skeletonising a NaN field yields dozens of
+            # fragments that all identify as det=1, i.e. exactly the "det 5 -> 1"
+            # signature a torus-knot run is looking for, produced for entirely the
+            # wrong reason. The loop already breaks on non-finite E ("BLEW UP") --
+            # but four lines too late, after the sample was written. So gate on the
+            # same condition the break uses, and record null instead.
+            finite = bool(np.isfinite(E["total"]))
+            want_det = (bool(det_every) and (n // every) % det_every == 0
+                        and finite)
             # ONE device->host copy, shared. At 320³ every np.asarray(u[i]) moves
             # 262 MB, so building φ₁ separately for each diagnostic would shift half
             # a gigabyte per sample to compute the same array twice.
@@ -614,6 +623,11 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
                              else f"UNIDENTIFIED (>{det_timeout:.0f}s)"), flush=True)
                 except Exception as e:
                     print(f"        (det sample skipped: {e})", flush=True)
+            elif bool(det_every) and (n // every) % det_every == 0:
+                # Explicit null, not an absent key: "we looked and the field was
+                # not a field" is a different statement from "we never looked".
+                entry["det1"] = None
+                print("        det(φ1): SKIPPED — E is not finite", flush=True)
             traj.append(entry)
             if not np.isfinite(E["total"]):
                 print("  BLEW UP"); break
@@ -639,22 +653,36 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
         cross_lk = round(float(cross_linking(p1, p2, dx)[0]), 3)
     except Exception as e:
         print(f"  (cross-linking skipped: {e})")
-    # ...and the END-STATE φ₁ self-knot determinant, unconditionally. Not gated on
-    # --det-every: it is one call on a state that is already in host memory, and it
-    # is the headline number a torus-knot run is judged by. `(size, det)` pairs are
-    # the form the particle catalog already registers -- cinquefoil_t25 is
-    # [[822, 5]] -- so this is directly comparable to a catalog entry rather than
-    # needing conversion.
+    # ...and the END-STATE φ₁ self-knot determinant, not gated on --det-every: it is
+    # one call on a state that is already in host memory, and it is the headline
+    # number a torus-knot run is judged by. `(size, det)` pairs are the form the
+    # particle catalog already registers -- cinquefoil_t25 is [[822, 5]] -- so this
+    # is directly comparable to a catalog entry rather than needing conversion.
+    #
+    # It IS gated on the energy being finite. A diverged run still has a φ₁ array,
+    # and skeletonising it returns dozens of fragments identifying as det=1 --
+    # which is the "det 5 -> 1" signature this measurement exists to detect,
+    # manufactured by the divergence rather than observed. None is the honest value.
+    #
+    # NOTE for consumers: knot_determinants reports a per-line failure as the STRING
+    # f"e:{ExceptionName}" in place of that line's integer, so det1 is a list of
+    # (int, int|str) and anything diffing it against a catalog entry must cope with
+    # that. Kept as a string rather than None because it says WHICH failure.
     det1 = None
-    try:
-        from ..knots import with_time_limit
-        from ..vortex_topology import knot_determinants
-        if p1 is None:
-            p1 = np.asarray(u[0]) + 1j * np.asarray(u[1])
-        det1 = with_time_limit(det_timeout,
-                               lambda: knot_determinants(p1, dx, L), None)
-    except Exception as e:
-        print(f"  (determinant skipped: {e})")
+    E_finite = bool(np.isfinite(E["total"]))
+    if not E_finite:
+        print("  determinant: SKIPPED — final E is not finite, so there is no knot "
+              "to identify (recording null rather than a manufactured det=1)")
+    else:
+        try:
+            from ..knots import with_time_limit
+            from ..vortex_topology import knot_determinants
+            if p1 is None:
+                p1 = np.asarray(u[0]) + 1j * np.asarray(u[1])
+            det1 = with_time_limit(det_timeout,
+                                   lambda: knot_determinants(p1, dx, L), None)
+        except Exception as e:
+            print(f"  (determinant skipped: {e})")
     _atomic_write(outp / "manifest.json", lambda f: f.write(json.dumps(
         {"params": params,
          "floor": floor, "traj": traj, "wall_s": time.time() - t0,
@@ -664,6 +692,10 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
          # change the descent by one step. Recorded here instead, so the manifest
          # still says what was measured and how often.
          "det_every": det_every, "det_timeout": det_timeout,
+         # Disambiguates a null det1: False means the field diverged and there was
+         # nothing to identify; True with det1 null means the identification itself
+         # timed out. Both are "no answer", for reasons a reader must not conflate.
+         "e_finite": E_finite,
          "cross_lk": cross_lk, "det1": det1}, indent=1).encode()))
     print(f"  FINAL E={E['total']:.1f} (EHN≈{ehn_ref}) link={E['link']/floor*100:+.0f}% "
           f"Lk(φ1,φ2)={cross_lk} det(φ1)={det1} "
