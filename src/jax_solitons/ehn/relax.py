@@ -21,6 +21,66 @@ Relaxation (repeat):
   (11) w_i ← w_i + U(B_i − ε∂A)  (multiplier ; U=50)
 EHN: U=50, γ=51, d=0.8/v, α=4e-4 v⁻², β=2e-3 v⁻², 320³.
 
+STEP-SIZE BOUND — α < 2/H, AND H IS NOT dx-INDEPENDENT BELOW dx≈0.14.
+Measured 2026-08-02 by power-iterating the Hessian of E_disc AT THE VACUUM
+(λ=1000, U=50, C=400) — which the integrator check below, run from a settled
+trefoil, is consistent with, so the core was not separately probed:
+
+      dx      H_max     α_max = 2/H
+    1.60     8000.0     2.50e-4      \
+    0.80     8000.0     2.50e-4       |  potential-dominated plateau:
+    0.40     8000.0     2.50e-4       |  H = 8λ exactly, dx-INDEPENDENT
+    0.20     8000.0     2.50e-4      /
+    0.10    15336.4     1.30e-4      <- gradient/gauge terms take over
+    0.05    61232.5     3.27e-5      <- H ∝ 1/dx² (ratio 3.99 ≈ 4 over 2x)
+
+Fitting the two sub-plateau rows as a pure c/dx² gives c = 153.4 and 153.1, so
+
+    H(dx) ≈ max(8λ, 153/dx²)        NOT a sum — see below
+
+and the branches cross at sqrt(153.2/8λ) = **dx ≈ 0.14**, not the 0.11 an
+analytic 2U/dx² = 8λ predicts. That estimate undershoots because the scalar
+gradient contributes alongside the gauge penalty: measured c is 153, not 2U=100.
+
+It has to be max() rather than a sum, and the dx=0.20 row is the proof —
+additive would predict 8000 + 153.2/0.04 = 11831, but the table measures exactly
+8000.0. The two branches are different eigenmodes, not two terms of one mode.
+
+**If you refine the grid, α MUST come down as 1/dx² once past the plateau.**
+The single number most readers want: **the default α=1e-4 is safe down to
+dx ≈ 0.088** (where H = 20000). Below that it diverges — at dx=0.05 the limit is
+3.3e-5 and 1e-4 is 3x over. Note the plateau ends at 0.14, so dx=0.12 is already
+off it (H = 10640, α_max = 1.88e-4) even though nothing breaks at the default.
+
+Recompute rather than trusting this table if λ, U, κ or c4 change: κ and the
+--c4 Skyrme quartic (relax.py `skyrme_e4`) are gradient terms, so they enter the
+1/dx² branch and move c; λ and U set where the branches cross.
+
+The plateau value 8λ is the JOINT radial mode: V = λ(|φ₁|²+|φ₂|²−1)² with both
+scalars at v/√2, so moving them together doubles d(|φ₁|²+|φ₂|²)/dh, quadrupling
+V — 2x the curvature per unit norm of the single-field mode (4λ, which measures
+4000.0 against analytic 4λ, ratio 1.0000).
+
+Confirmed against the integrator at λ=1000, dx=0.8, 200 steps from a settled
+trefoil — the predicted 2/H = 2.50e-4 is where it actually breaks:
+
+    α = 2.00e-4   E=3333.3  Lk=-3.0   stable
+    α = 2.05e-4   E=3334.3  Lk=-3.0   stable      (= EHN 4e-4 x dx³)
+    α = 2.50e-4   E=3332.1  Lk=-3.0   stable      (marginal: |1-αH| = 1)
+    α = 3.00e-4   E=7.2e8             DIVERGING
+    α = 4.00e-4   E=nan               NaN
+
+α=2.5e-4 surviving 200 steps is expected: 2/H is where |1-αH| reaches 1, so it
+is the marginal case rather than the first unstable one. Anything above it goes.
+The practical default should sit below, not on, the bound.
+
+That also means EHN's published α=4e-4 exceeds the bound of this
+functional by 1.6x. Their d³-weighted energy (their Eq.1 is
+E = ∫d³x ℰ, and the supplemental writes E ≃ d³ Σ ℰ_disc) would give an effective
+step of 4e-4 × 0.8³ = 2.05e-4, inside the bound — but so would a plain ½, and
+with one dx in the paper nothing here separates 0.512 from 0.5. Recorded as an
+open discrepancy, not a resolved one.
+
   python3 ehn_relax.py            # co-relax a knot, C=400 on from start
 """
 import os, sys, time, json
@@ -490,7 +550,13 @@ if __name__ == "__main__":
     ap.add_argument("--C", type=float, default=400.0)
     ap.add_argument("--U", type=float, default=50.0)
     ap.add_argument("--eps-a", type=float, default=0.05)
-    ap.add_argument("--alpha", type=float, default=1e-4)
+    ap.add_argument("--alpha", type=float, default=1e-4,
+                    help="descent step. STABILITY: alpha < 2/H, with "
+                         "H ~ max(8*lam, 153/dx^2) -- flat at 8000 (lam=1000) "
+                         "down to dx~0.14, then 1/dx^2. THIS DEFAULT IS SAFE "
+                         "TO dx~0.088 and diverges below it (3.3e-5 is the "
+                         "limit at dx=0.05). Scale alpha as 1/dx^2 when "
+                         "refining; recompute if lam/U/kappa/c4 change.")
     ap.add_argument("--beta", type=float, default=2e-3)
     ap.add_argument("--q1", type=float, default=1.0)
     ap.add_argument("--q2", type=float, default=0.0)
