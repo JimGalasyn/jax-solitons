@@ -14,6 +14,7 @@ no reason to appear in a docstring.
 """
 import ast
 import pathlib
+import sys
 
 import pytest
 
@@ -73,9 +74,19 @@ def test_no_accidental_line_continuation_in_docstrings(path):
 
 
 def test_the_alpha_bound_table_still_has_one_row_per_dx():
-    """The specific regression: six rows, each on its own line."""
+    """The specific regression: six rows, each on its own line.
+
+    Unlike the check above — which reads the SOURCE and so is unaffected — this
+    one reads the rendered __doc__, and `python -OO` strips docstrings entirely.
+    Skip explicitly in that case rather than letting `in None` raise TypeError:
+    a stripped docstring is not a defect, it just means this guard cannot run,
+    and a skip says that where a failure would misreport it.
+    """
+    if sys.flags.optimize >= 2:
+        pytest.skip("-OO strips docstrings; this guard has nothing to read")
     from jax_solitons.ehn import relax
     doc = relax.__doc__
+    assert doc is not None, "relax has no module docstring at all"
     assert "α_max = 2/H" in doc, "the stability table is gone"
     body = doc[doc.index("α_max = 2/H"):]
     for dx in ("1.60", "0.80", "0.40", "0.20", "0.10", "0.05"):
