@@ -491,7 +491,8 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
         C=400.0, U=50.0, eps_a=0.05, alpha=4e-4, beta=2e-3, q1=1.0, q2=0.0,
         steps=40000, samples=40, n_ic=400, ic="london", cramp=0, agrad="bilinear",
         c4=0.0, out="out_ehn_relax", resume=None, save_every=0,
-        geom="rings", tp=2, tq=3, rminor=None, twist=0, topo_every=0):
+        geom="rings", tp=2, tq=3, rminor=None, twist=0, topo_every=0,
+        det_every=0, det_timeout=180.0):
     global AGRAD, C4
     AGRAD = agrad        # before the first jit trace, so E_disc/relax_iter pick it up
     C4 = c4              # Skyrme quartic ℒ₃ coeff (0 = off)
@@ -564,10 +565,16 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
             # cross-Lk(φ₁,φ₂) + per-species skeleton segment counts, into the manifest
             # (feeds the ECS recorder's P-odd ledger offline; default 0 = off, zero
             # behavior change for existing campaigns).
-            if topo_every and (n // every) % topo_every == 0:
+            want_topo = bool(topo_every) and (n // every) % topo_every == 0
+            want_det = bool(det_every) and (n // every) % det_every == 0
+            # ONE device->host copy, shared. At 320³ every np.asarray(u[i]) moves
+            # 262 MB, so building φ₁ separately for each diagnostic would shift half
+            # a gigabyte per sample to compute the same array twice.
+            p1n = (np.asarray(u[0]) + 1j * np.asarray(u[1])
+                   if (want_topo or want_det) else None)
+            if want_topo:
                 try:
                     from .cross_linking import cross_linking
-                    p1n = np.asarray(u[0]) + 1j * np.asarray(u[1])
                     p2n = np.asarray(u[2]) + 1j * np.asarray(u[3])
                     xlk, ns1, ns2 = cross_linking(p1n, p2n, dx)
                     entry.update({"xlk": (round(float(xlk), 3)
@@ -577,6 +584,36 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
                           f"nseg1={ns1} nseg2={ns2}", flush=True)
                 except Exception as e:
                     print(f"        (topo sample skipped: {e})", flush=True)
+            # opt-in per-sample SELF-KNOT determinant of the φ₁ string
+            # (--det-every K). This is the quantity a torus-knot run at EHN's box
+            # size exists to measure, and the three above cannot substitute for it:
+            # cross-Lk says the two strings are still linked to each other, nseg
+            # says the skeleton changed size, and NEITHER dates a self-reconnection.
+            # det 5 → 1 is what does, and it is what the local cinquefoil showed
+            # between 33k and 36k steps while its Lk held at −5.0 throughout.
+            #
+            # It lands in the manifest rather than requiring the field, because on
+            # 2026-08-03 a 3.7 GB field.npz truncated to 2.1 GB crossing a vast SSH
+            # proxy and the whole deliverable of a $0.42 rental went with it. A 9 KB
+            # manifest that already carries the answer cannot truncate that way.
+            #
+            # TIME-BOXED, and that is not belt-and-braces: identify_knot's own
+            # docstring records multi-hour grinds on noisy evolved curves, and
+            # knot_determinants catches exceptions per line but an infinite grind is
+            # not an exception. A diagnostic must never wedge a paid descent, so on
+            # timeout the sample records null and the relaxation carries on.
+            if want_det:
+                try:
+                    from ..knots import with_time_limit
+                    from ..vortex_topology import knot_determinants
+                    dets = with_time_limit(
+                        det_timeout, lambda: knot_determinants(p1n, dx, L), None)
+                    entry["det1"] = dets
+                    print(f"        det(φ1): "
+                          + (f"{dets}" if dets is not None
+                             else f"UNIDENTIFIED (>{det_timeout:.0f}s)"), flush=True)
+                except Exception as e:
+                    print(f"        (det sample skipped: {e})", flush=True)
             traj.append(entry)
             if not np.isfinite(E["total"]):
                 print("  BLEW UP"); break
@@ -594,6 +631,7 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
     # on-box cross-linking diagnostic → into the (small) manifest, so we never have to
     # fetch the 3.7GB field just to read the topology (the fetch that truncated before).
     cross_lk = None
+    p1 = None
     try:
         from .cross_linking import cross_linking
         p1 = np.asarray(u[0]) + 1j * np.asarray(u[1])
@@ -601,12 +639,35 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
         cross_lk = round(float(cross_linking(p1, p2, dx)[0]), 3)
     except Exception as e:
         print(f"  (cross-linking skipped: {e})")
+    # ...and the END-STATE φ₁ self-knot determinant, unconditionally. Not gated on
+    # --det-every: it is one call on a state that is already in host memory, and it
+    # is the headline number a torus-knot run is judged by. `(size, det)` pairs are
+    # the form the particle catalog already registers -- cinquefoil_t25 is
+    # [[822, 5]] -- so this is directly comparable to a catalog entry rather than
+    # needing conversion.
+    det1 = None
+    try:
+        from ..knots import with_time_limit
+        from ..vortex_topology import knot_determinants
+        if p1 is None:
+            p1 = np.asarray(u[0]) + 1j * np.asarray(u[1])
+        det1 = with_time_limit(det_timeout,
+                               lambda: knot_determinants(p1, dx, L), None)
+    except Exception as e:
+        print(f"  (determinant skipped: {e})")
     _atomic_write(outp / "manifest.json", lambda f: f.write(json.dumps(
         {"params": params,
          "floor": floor, "traj": traj, "wall_s": time.time() - t0,
-         "cross_lk": cross_lk}, indent=1).encode()))
+         # det_every/det_timeout are deliberately NOT in `params`: that dict is the
+         # set that reproduces the STATE (its own comment says so, and
+         # _seed_from_resumed carries it forward), and a diagnostic cadence does not
+         # change the descent by one step. Recorded here instead, so the manifest
+         # still says what was measured and how often.
+         "det_every": det_every, "det_timeout": det_timeout,
+         "cross_lk": cross_lk, "det1": det1}, indent=1).encode()))
     print(f"  FINAL E={E['total']:.1f} (EHN≈{ehn_ref}) link={E['link']/floor*100:+.0f}% "
-          f"Lk(φ1,φ2)={cross_lk} Q done mag={E['mag']:.1f} el={E['elec']:.1f}  ({time.time()-t0:.0f}s)")
+          f"Lk(φ1,φ2)={cross_lk} det(φ1)={det1} "
+          f"mag={E['mag']:.1f} el={E['elec']:.1f}  ({time.time()-t0:.0f}s)")
 
 
 if __name__ == "__main__":
@@ -649,6 +710,20 @@ if __name__ == "__main__":
     ap.add_argument("--topo-every", type=int, default=0,
                     help="opt-in: cross-Lk + skeleton counts every Kth sample into "
                          "the manifest traj (0 = off; feeds the ECS recorder)")
+    ap.add_argument("--det-every", type=int, default=0,
+                    help="opt-in: phi1 SELF-KNOT determinant every Kth sample into "
+                         "the manifest traj (0 = off). Answers what cross-Lk cannot: "
+                         "Lk is the link BETWEEN the strings and holds while one "
+                         "string unknots ITSELF, so only the determinant dates a "
+                         "self-reconnection (det 5 -> 1). The END-STATE determinant "
+                         "is always recorded regardless of this flag; K only buys "
+                         "the trajectory. Costs a skeleton trace plus a pyknotid "
+                         "Alexander per sample -- time-boxed by --det-timeout.")
+    ap.add_argument("--det-timeout", type=float, default=180.0,
+                    help="wall-clock budget per determinant (s). identify_knot can "
+                         "grind for hours on a noisy evolved curve, and a diagnostic "
+                         "must never wedge a paid descent: on timeout the sample "
+                         "records null and the relaxation continues.")
     ap.add_argument("--geom", choices=["rings", "torus"], default="rings",
                     help="φ₁ geometry: rings = nlink rings on the φ₂ ring (EHN); "
                          "torus = one T(p,q) torus knot around the φ₂ ring (trefoil test)")
@@ -665,4 +740,5 @@ if __name__ == "__main__":
         steps=a.steps, samples=a.samples, n_ic=a.n_ic, ic=a.ic, cramp=a.cramp,
         agrad=a.agrad, c4=a.c4, out=a.out, resume=a.resume, save_every=a.save_every,
         geom=a.geom, tp=a.tp, tq=a.tq, rminor=a.rminor, twist=a.twist,
-        topo_every=a.topo_every)
+        topo_every=a.topo_every, det_every=a.det_every,
+        det_timeout=a.det_timeout)

@@ -9,6 +9,8 @@ Used to disambiguate the R-scan: does the low-E small-R config still carry the l
 
   python ehn_cross_linking.py output/ehn_rscan/*/out_ehn_relax/field.npz
 """
+import sys
+
 import numpy as np
 
 # The two sys.path inserts that used to sit here ("on-box: everything shipped
