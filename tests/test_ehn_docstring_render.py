@@ -23,39 +23,53 @@ EHN_DIR = pathlib.Path(ehn_pkg.__file__).resolve().parent
 SOURCES = sorted(EHN_DIR.glob("*.py"))
 
 
-def _docstrings(path):
-    """(qualname, text) for every docstring in a module, including the module's."""
+def _docstring_line_ranges(path):
+    """(start, end) 1-based inclusive line spans of every docstring in a module.
+
+    A docstring is the first statement of a module/class/function and is an
+    ast.Expr wrapping a str constant, so its lineno/end_lineno bound exactly the
+    physical lines of the literal — which is what the backslash check must look
+    at and nothing else.
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    out = []
+    spans = []
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
-                             ast.AsyncFunctionDef)):
-            doc = ast.get_docstring(node, clean=False)
-            if doc:
-                name = getattr(node, "name", "<module>")
-                out.append((f"{path.name}:{name}", doc))
-    return out
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)):
+            continue
+        body = getattr(node, "body", None)
+        if not body:
+            continue
+        first = body[0]
+        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            spans.append((first.lineno, first.end_lineno))
+    return spans
 
 
 @pytest.mark.parametrize("path", SOURCES, ids=lambda p: p.name)
 def test_no_accidental_line_continuation_in_docstrings(path):
-    """ast.get_docstring returns the RENDERED text, so a swallowed newline is
-    already gone by the time we see it — detect it in the source instead."""
-    raw = path.read_text(encoding="utf-8")
-    for lineno, line in enumerate(raw.splitlines(), 1):
-        stripped = line.rstrip()
-        if not stripped.endswith("\\"):
-            continue
-        trailing = len(stripped) - len(stripped.rstrip("\\"))
-        if trailing % 2 == 1 and not stripped.lstrip().startswith("#"):
-            # An odd count escapes the newline. Legal in code (explicit
-            # continuation); in a docstring table it eats a row.
-            pytest.fail(
-                f"{path.name}:{lineno} ends in an odd number of backslashes:\n"
-                f"    {stripped!r}\n"
-                "Inside a docstring this joins the next line onto this one. Use a "
-                "box-drawing character for ASCII art, or double the backslash."
-            )
+    """Scans DOCSTRING lines only.
+
+    An explicit continuation in ordinary code is legitimate and common, so
+    checking every physical line would fail honest code — the earlier version of
+    this test did exactly that, and only passed because no ehn module happens to
+    use one. Inside a docstring the same backslash silently eats the next line.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for start, end in _docstring_line_ranges(path):
+        for lineno in range(start, min(end, len(lines)) + 1):
+            stripped = lines[lineno - 1].rstrip()
+            if not stripped.endswith("\\"):
+                continue
+            trailing = len(stripped) - len(stripped.rstrip("\\"))
+            if trailing % 2 == 1:
+                pytest.fail(
+                    f"{path.name}:{lineno} ends in an odd number of backslashes "
+                    f"INSIDE A DOCSTRING:\n    {stripped!r}\n"
+                    "That joins the next line onto this one. Use a box-drawing "
+                    "character for ASCII art, or double the backslash."
+                )
 
 
 def test_the_alpha_bound_table_still_has_one_row_per_dx():
