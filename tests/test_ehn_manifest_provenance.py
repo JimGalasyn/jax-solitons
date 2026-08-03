@@ -12,6 +12,7 @@ dominant path in practice — soliton-playground's `_relax_cmd` drops geom_args
 whenever it passes --resume.
 """
 import json
+import math
 
 import pytest
 
@@ -153,3 +154,33 @@ def test_end_state_determinant_is_recorded_even_with_the_series_off(tmp_path):
     assert "det1" in m, "end-state determinant missing from the manifest"
     assert not any("det1" in e for e in m["traj"]), \
         "det_every=0 must leave the per-sample series off"
+
+
+def test_a_diverged_run_records_no_determinant(tmp_path):
+    """A NaN field must not produce a det, because the det it produces is det=1.
+
+    Found by review, 2026-08-03: driving the relaxation to E=nan still wrote an
+    end-state det1 -- dozens of skeleton fragments, all identifying as det=1, with
+    'e:IndexError' strings mixed in. det 5 -> 1 is precisely the unknotting
+    signature these runs exist to detect, so a diverged run was manufacturing the
+    result rather than measuring it. Null is the honest value, and `e_finite`
+    distinguishes it from an identification that merely timed out.
+
+    alpha far above the 2/H stability bound diverges within a couple of steps.
+    """
+    from jax_solitons.ehn.relax import run
+    out = tmp_path / "nan"
+    run(N=8, L=6.4, R=1.5, geom="torus", tp=2, tq=3, alpha=1e9, lam=1e6,
+        steps=4, samples=4, det_every=1, out=str(out))
+    m = json.loads((out / "manifest.json").read_text())
+    # Establish the premise from a field that exists on BOTH sides of this fix, so
+    # that on the parent commit the test fails on the DEFECT (a det recorded over a
+    # diverged field) rather than on the absence of the new `e_finite` key.
+    assert any(not math.isfinite(e["total"]) for e in m["traj"]), \
+        "test did not actually diverge; it pins nothing"
+    assert m["det1"] is None, f"det recorded on a diverged field: {m['det1']}"
+    assert m["e_finite"] is False
+    for e in m["traj"]:
+        if not math.isfinite(e["total"]):
+            assert e.get("det1", "absent") is None, \
+                f"non-finite sample n={e['n']} carries det1={e['det1']}"
