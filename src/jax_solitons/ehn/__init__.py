@@ -32,7 +32,11 @@ steps):
 
 Same knot, same determinant 3, same 978-segment skeleton. The trefoil forms at
 82% of the bound as readily as at 40%, so the step size is not what separates us
-from EHN. (The energy gap is only descent distance: 2.05x the step buys ~24.6k
+from EHN. (That 82% is 2.05e-4 / (2/H) with H = 8*lam, which per relax.py's
+docstring is the POTENTIAL-DOMINATED plateau -- true for dx >= 0.14 and so for
+this box's dx=0.8, but not below it. A successor repeating this test at finer dx
+must re-derive the fraction rather than copy it: the same alpha is a different
+fraction of a different bound.) (The energy gap is only descent distance: 2.05x the step buys ~24.6k
 steps' worth in 12k, and 3794 lies between the control's 12k value and the
 settled 3333. Neither arm is fully relaxed; the claim tested is that the
 topology FORMS and holds, not that it has converged.)
