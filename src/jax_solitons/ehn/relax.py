@@ -431,6 +431,62 @@ def _load_field(path):
     return u, jnp.asarray(d["s"]), w, int(d["n"])
 
 
+def _seed_params(geom, tp, tq, R, rminor, twist, nlink):
+    """The seed fields the manifest must carry to identify which IC produced a state.
+
+    Without these, `--geom rings --nlink 3` and `--geom torus --tp 2 --tq 3` write
+    BYTE-IDENTICAL params: the torus branch sets nlink = tq, so both record
+    nlink=3 and nothing else distinguishes them. Those are different physics --
+    rings threads nlink separate phi1 loops on the phi2 ring (EHN's IC), torus
+    winds a SINGLE phi1 curve p times round and q times through -- and the held
+    T(2,3) trefoil at N_link=3 exists only on the torus branch. A stored state
+    whose manifest cannot say which IC produced it cannot be reproduced from its
+    manifest, which is the manifest's whole job.
+
+    `rminor` must be the value the IC ACTUALLY used, resolved by the caller --
+    not None with the 0.45*R default reapplied here. Two copies of a default
+    drift, and a rounded copy is not the number the run used.
+
+    Found 2026-08-02 trying to re-derive the trefoil's seed from field_store: the
+    recorded params were consistent with either.
+    """
+    p = {"geom": geom, "R": float(R), "nlink": int(nlink)}
+    if geom == "torus":
+        p.update({"tp": int(tp), "tq": int(tq), "twist": int(twist),
+                  "rminor": float(rminor)})
+    return p
+
+
+def _seed_from_resumed(resume_path):
+    """Carry the seed block FORWARD from the resumed state, never from argv.
+
+    A resumed run builds no IC, so this invocation's --geom/--tp/--tq/--R say
+    nothing about the state actually being relaxed. Reading them anyway is worse
+    than recording nothing: the manifest becomes CONFIDENTLY WRONG rather than
+    merely ambiguous, and silently so.
+
+    That is the dominant path, not a corner case. soliton-playground's
+    `_relax_cmd` does `if resume: cmd += ["--resume", ...] else: cmd += geom_args`,
+    so every resumed leg in the standard box drops --geom, --tp, --tq and --R.
+    B6's headroom probes resume the B2 trefoil (real R = 0.22*153.6 = 33.79) and
+    would otherwise file `geom: "rings", R: 14.0` -- the CLI defaults.
+
+    Returns the previous manifest's seed keys, or an explicit unavailable marker.
+    Recording nothing is recoverable; recording the wrong thing is not.
+    """
+    prev = Path(resume_path).parent / "manifest.json"
+    out = {"resumed_from": str(resume_path)}
+    try:
+        params = json.loads(prev.read_text())["params"]
+    except Exception:                                          # noqa: BLE001
+        return {**out, "geom": None, "seed_provenance": "unavailable"}
+    carried = {k: params[k] for k in ("geom", "R", "nlink", "tp", "tq",
+                                      "twist", "rminor") if k in params}
+    if not carried:
+        return {**out, "geom": None, "seed_provenance": "unavailable"}
+    return {**out, **carried, "seed_provenance": "carried-forward"}
+
+
 def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
         C=400.0, U=50.0, eps_a=0.05, alpha=4e-4, beta=2e-3, q1=1.0, q2=0.0,
         steps=40000, samples=40, n_ic=400, ic="london", cramp=0, agrad="bilinear",
@@ -444,13 +500,22 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
     outp = Path(out); outp.mkdir(parents=True, exist_ok=True)
     fld = outp / "field.npz"
     z = jnp.zeros((N, N, N))
+    rr = rminor if rminor is not None else 0.45 * R   # ONE copy of the default;
+                                                      # _seed_params records this
     if resume:
         u, s, w, n_start = _load_field(resume)
-        print(f"RESUMED from {resume} at n={n_start} (skipping IC build)")
+        seed = _seed_from_resumed(resume)
+        # nlink drives `floor`, and so the printed link% and the manifest's floor.
+        # It used to be left at the ARGUMENT default on this path (4), while
+        # _relax_cmd drops --nlink on resume -- so a resumed torus T(2,3) scored
+        # its link against a floor 4/3 too large. Carry it forward with the seed.
+        if seed.get("nlink") is not None:
+            nlink = int(seed["nlink"])
+        print(f"RESUMED from {resume} at n={n_start} (skipping IC build); "
+              f"seed {seed.get('seed_provenance', 'unavailable')}, nlink={nlink}")
     else:
         # n_ic = curve-segment resolution for the IC solid-angle phase (GPU builder).
         if geom == "torus":
-            rr = rminor if rminor is not None else 0.45 * R
             phi1, phi2 = build_ic_torus(N, L, tp, tq, R, rr, core, n=max(n_ic, 800),
                                         twist=twist)
             nlink = tq        # the q meridian winds encircle φ₂ ⟹ Lk floor = q
@@ -466,6 +531,16 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
         s = z            # A0
         w = (z, z, z)    # multiplier
         n_start = 0
+        seed = _seed_params(geom, tp, tq, R, rr, twist, nlink)
+    # Built ONCE. Two hand-curated copies at the two manifest writes drifted the
+    # last time an argument was added, and the functional parameters below
+    # (lam/kappa/eps_a/q1/q2/c4) and IC parameters (core/n_ic) were missing
+    # entirely -- so a manifest could name its seed and still not reproduce its
+    # state. If you add an argument to run(), add it here.
+    params = {"N": N, "L": L, "C": C, "alpha": alpha, "beta": beta, "U": U,
+              "ic": ic, "cramp": cramp, "agrad": agrad,
+              "lam": lam, "kappa": kappa, "eps_a": eps_a, "q1": q1, "q2": q2,
+              "c4": c4, "core": core, "n_ic": n_ic, **seed}
     floor = (2 * PI) ** 2 * nlink
     ehn_ref = {4: 6.0e3, 5: 7.0e3}.get(nlink)
     print(f"EHN FAITHFUL relaxer  N={N} L={L} dx={dx:.3f} nlink={nlink} C={C} "
@@ -506,9 +581,7 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
             if not np.isfinite(E["total"]):
                 print("  BLEW UP"); break
             _atomic_write(outp / "manifest.json", lambda f: f.write(json.dumps(
-                {"params": {"N": N, "L": L, "nlink": nlink, "C": C, "alpha": alpha,
-                            "beta": beta, "U": U, "ic": ic, "cramp": cramp,
-                            "agrad": agrad},
+                {"params": params,
                  "floor": floor, "traj": traj,
                  "wall_s": time.time() - t0}, indent=1).encode()))
         if save_every and n % save_every == 0 and n > n_start:
@@ -529,8 +602,7 @@ def run(N=96, L=76.8, nlink=4, R=14.0, core=2.0, lam=1000.0, kappa=0.0008,
     except Exception as e:
         print(f"  (cross-linking skipped: {e})")
     _atomic_write(outp / "manifest.json", lambda f: f.write(json.dumps(
-        {"params": {"N": N, "L": L, "nlink": nlink, "C": C, "alpha": alpha,
-                    "beta": beta, "U": U, "ic": ic, "cramp": cramp, "agrad": agrad},
+        {"params": params,
          "floor": floor, "traj": traj, "wall_s": time.time() - t0,
          "cross_lk": cross_lk}, indent=1).encode()))
     print(f"  FINAL E={E['total']:.1f} (EHN≈{ehn_ref}) link={E['link']/floor*100:+.0f}% "
