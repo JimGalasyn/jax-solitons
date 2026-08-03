@@ -19,9 +19,11 @@ must not be merged:
               those states.
 
 WHY WE REACH N_link = 3 AND EHN DID NOT — the seed, not the step size.
-The obvious competing explanation was descent aggressiveness: EHN's alpha=4e-4
-would sit at ~82% of this functional's stability bound (2/H = 2.5e-4) against
-our 1e-4 at 40%, and a large step can skip a shallow basin -- which EHN's own
+The obvious competing explanation was descent aggressiveness. EHN publish
+alpha=4e-4, which is 160% of this functional's stability bound (2/H = 2.5e-4)
+and would simply diverge; read through their d^3-weighted energy it is an
+effective 4e-4 * 0.8^3 = 2.05e-4, and THAT is the ~82% figure used below --
+against our 1e-4 at 40%. A large step can skip a shallow basin, which EHN's own
 "smaller electric charges" remark says a low-N_link state should have. TESTED
 2026-08-02 and FALSE. Two runs seeded fresh from n=0, identical but for alpha
 (N=192, L=153.6, R=0.22L, torus tp=2 tq=3, screened, cramp 8000, wrapped, 12k

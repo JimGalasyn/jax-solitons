@@ -27,10 +27,10 @@ Measured 2026-08-02 by power-iterating the Hessian of E_disc AT THE VACUUM
 trefoil, is consistent with, so the core was not separately probed:
 
       dx      H_max     α_max = 2/H
-    1.60     8000.0     2.50e-4      \
-    0.80     8000.0     2.50e-4       |  potential-dominated plateau:
-    0.40     8000.0     2.50e-4       |  H = 8λ exactly, dx-INDEPENDENT
-    0.20     8000.0     2.50e-4      /
+    1.60     8000.0     2.50e-4      ┐
+    0.80     8000.0     2.50e-4      │  potential-dominated plateau:
+    0.40     8000.0     2.50e-4      │  H = 8λ exactly, dx-INDEPENDENT
+    0.20     8000.0     2.50e-4      ┘
     0.10    15336.4     1.30e-4      <- gradient/gauge terms take over
     0.05    61232.5     3.27e-5      <- H ∝ 1/dx² (ratio 3.99 ≈ 4 over 2x)
 
