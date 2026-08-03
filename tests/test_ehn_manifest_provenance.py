@@ -117,3 +117,39 @@ def test_run_records_the_functional_parameters(tmp_path):
     for k in ("lam", "kappa", "eps_a", "q1", "q2", "c4", "core", "n_ic",
               "N", "L", "C", "alpha", "beta", "U", "ic", "cramp", "agrad"):
         assert k in params, f"{k} missing — manifest cannot reproduce its state"
+
+
+# --- the φ₁ self-knot determinant, in the manifest --------------------------
+# These pin the CALL SITE, not the measurement: knot_determinants has its own
+# tests, and the defect worth guarding here is a flag that never reaches the
+# manifest. That is not hypothetical — --topo-every shipped defaulting to 0 with
+# nothing exercising the wiring, and a 2026-08-03 rental was configured without
+# it and would have produced no topology series at all. A diagnostic nobody
+# asserts on is a diagnostic that can quietly not happen.
+
+def test_det_every_records_a_determinant_series(tmp_path):
+    """--det-every K must put a det1 on every sampled traj entry."""
+    from jax_solitons.ehn.relax import run
+    out = tmp_path / "d"
+    run(N=8, L=6.4, R=1.5, geom="torus", tp=2, tq=3,
+        steps=2, samples=2, det_every=1, out=str(out))
+    traj = json.loads((out / "manifest.json").read_text())["traj"]
+    assert traj, "no samples recorded at all"
+    missing = [e["n"] for e in traj if "det1" not in e]
+    assert not missing, f"samples without det1: {missing}"
+
+
+def test_end_state_determinant_is_recorded_even_with_the_series_off(tmp_path):
+    """det_every gates the SERIES only; the end-state number is unconditional.
+
+    It is one call on a state already in host memory, and it is the number a
+    torus-knot run is judged by — so it must not depend on remembering a flag.
+    """
+    from jax_solitons.ehn.relax import run
+    out = tmp_path / "d"
+    run(N=8, L=6.4, R=1.5, geom="torus", tp=2, tq=3,
+        steps=2, samples=2, det_every=0, out=str(out))
+    m = json.loads((out / "manifest.json").read_text())
+    assert "det1" in m, "end-state determinant missing from the manifest"
+    assert not any("det1" in e for e in m["traj"]), \
+        "det_every=0 must leave the per-sample series off"
