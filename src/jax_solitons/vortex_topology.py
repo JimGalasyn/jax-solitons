@@ -122,8 +122,23 @@ def knot_determinants(psi, dx, L, min_seg=12, min_pts=14):
     determinant (1=unknot/lepton, 3=trefoil/baryon, 5=cinquefoil, ...).
     Returns list of (size, det) sorted by size. Lines too short to be knotted
     (< min_pts ordered points) are unknots by definition (det=1) -- this is the
-    fix for the IndexError pyknotid threw on degenerate short tangle lines."""
-    from .knots import identify_knot
+    fix for the IndexError pyknotid threw on degenerate short tangle lines.
+
+    RAISES ImportError, ONCE, when identification is unavailable, rather than
+    substituting it per line. The per-line `f"e:{ExceptionName}"` fallback below is
+    for failures that are properties of a CURVE -- a degenerate line, a pathological
+    trace. A missing pyknotid is a property of the ENVIRONMENT and identical for
+    every line, so recording it per line writes an environment failure into a
+    manifest in the exact shape of a measurement.
+
+    That is not hypothetical: on 2026-08-03 a $1.50 N=320 rental returned 73 samples
+    of `det1 = [[2352, 'e:ImportError']]`, the leg reported OK with remote_exit=0,
+    and the measurement the box was rented for had not run once. pyknotid is an
+    optional extra (`knots`), the remote pip line installed no extras, and nothing
+    anywhere failed. Checked BEFORE the skeleton work, so an unusable environment
+    costs an import rather than a full trace."""
+    from .knots import _knot_class, identify_knot
+    _knot_class()          # raises ImportError with pyknotid's own install hint
     P, T, C = vortex_skeleton(psi)
     if not len(P):
         return []
