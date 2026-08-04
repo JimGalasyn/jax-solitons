@@ -156,3 +156,52 @@ def test_core_curves_from_psi_is_a_front_end():
     X, Y, _ = np.meshgrid(ax, ax, ax, indexing="ij")
     psi = X + 1j * Y
     assert isinstance(core_curves_from_psi(psi, (ax, ax, ax)), list)
+
+
+def test_knot_determinants_raises_once_when_pyknotid_is_absent(monkeypatch):
+    """A missing pyknotid must RAISE, not become per-line data.
+
+    From a real loss, 2026-08-03: a $1.50 N=320 rental recorded 73 samples of
+    `det1 = [[2352, 'e:ImportError']]` and reported OK with remote_exit=0. pyknotid
+    is an optional extra, the remote pip line installed no extras, and the failure
+    was written into the manifest in the shape of a measurement -- an environment
+    fault dressed as a property of the curve.
+    """
+    import numpy as np
+    import jax_solitons.knots as K
+    from jax_solitons.vortex_topology import knot_determinants
+
+    def no_pyknotid():
+        raise ImportError("pyknotid is required for identify_knot; pip install "
+                          "'jax-solitons[knots]'")
+    monkeypatch.setattr(K, "_knot_class", no_pyknotid)
+
+    # A field with real vortex lines, so the failure cannot be "nothing to identify".
+    n = 24
+    ax = (np.arange(n) - n / 2) * 0.8
+    X, Y, Z = np.meshgrid(ax, ax, ax, indexing="ij")
+    psi = (X + 1j * Y)                      # a straight vortex line along z
+    with pytest.raises(ImportError, match="pyknotid"):
+        knot_determinants(psi, 0.8, n * 0.8)
+
+
+def test_per_curve_failures_are_still_recorded_per_line(monkeypatch):
+    """The string fallback stays for failures that ARE properties of a curve."""
+    import numpy as np
+    import jax_solitons.knots as K
+    from jax_solitons.vortex_topology import knot_determinants
+
+    def boom(curve, **kw):
+        raise IndexError("degenerate trace")
+    monkeypatch.setattr(K, "identify_knot", boom)
+    monkeypatch.setattr("jax_solitons.vortex_topology.identify_knot", boom,
+                        raising=False)
+    n = 24
+    ax = (np.arange(n) - n / 2) * 0.8
+    X, Y, Z = np.meshgrid(ax, ax, ax, indexing="ij")
+    psi = (X + 1j * Y)
+    out = knot_determinants(psi, 0.8, n * 0.8)
+    assert out, "no lines identified, so the per-line path was never exercised"
+    assert all(d == "e:IndexError" for _, d in out), out
+    # And the sizes are still real, so the caller can see WHICH lines failed.
+    assert all(isinstance(s, int) and s > 0 for s, _ in out), out
