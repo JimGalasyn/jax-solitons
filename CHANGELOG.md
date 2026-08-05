@@ -7,6 +7,34 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [0.1.0] — Skyrme, the EHN migration, and three ways a non-answer stopped looking like one
+
+Leaves the `0.0.x` series because the Skyrme model is a whole new physics model, and this
+project's rule is *pre-1.0, minor = features*.
+
+The three fixes below are one family, and the framing that connects them is worth stating
+once: **the manifest is the artifact people trust without the field to check against, so
+anything that writes a non-answer in the shape of an answer is the worst defect
+available.** Each was found by a rental that reported success.
+
+### Fixed
+- **A missing `pyknotid` now RAISES instead of becoming per-line data**
+  (`vortex_topology.py`). An N=320 rental **ran, cost $1.50, reported OK with
+  `remote_exit=0`, and recorded 73 of 73 samples as `det1 = [[2352, 'e:ImportError']]`.**
+  The measurement the box was rented for never executed and nothing anywhere failed:
+  `pyknotid` is an optional extra, the driver's remote pip line installed none, and
+  `knot_determinants` substitutes `f"e:{ExceptionName}"` per line — so an **environment**
+  fault, identical for every line, entered the manifest in the exact shape of a per-curve
+  measurement. Availability is now checked **once** via `_knot_class()`, which raises with
+  pyknotid's own install hint, and **before** `vortex_skeleton`, so an unusable environment
+  costs an import rather than a full trace at 320³. The per-line string fallback **stays**,
+  for failures that genuinely are properties of a curve — that distinction is the point; it
+  was not removed, it was stopped from swallowing a category error.
+- **A diverged field has no knot type** — stop recording `det = 1` for one. Same family:
+  a number that reads as a measurement when the run had already failed.
+- **The self-knot determinant is computed ON THE BOX**, so a dead SSH proxy cannot take
+  the deliverable with it.
+
 ### Added
 - **`jax_solitons.models.skyrme`** — the SU(2)/S³ Skyrme model (`skyrme_model`,
   `baryon_charge`, `skyrme_energy_density`, `skyrme_bound`, `E0MassTerm`, `E2O4Term`,
