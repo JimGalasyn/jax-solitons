@@ -69,7 +69,7 @@ failure with two possible causes.
 
   python -m jax_solitons.ehn.relax --geom torus --tp 2 --tq 3 --R 33.792
 """
-__all__ = ["cross_linking", "energy", "knot_batch", "relax"]
+__all__ = ["cross_linking", "energy", "knot_batch", "quench", "relax"]
 
 
 def __getattr__(name):
