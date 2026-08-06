@@ -56,7 +56,7 @@ def curlA(Ax, Ay, Az, dx):
 
 # --- THE LOCK primitive -------------------------------------------------------
 def axion_grad(p2, dx, eps_a, agrad):
-    """∂_i a  (a = arg φ₂), two discretizations selected by `agrad`:
+    """∂_i a  (a = arg φ₂), three discretizations selected by `agrad`:
 
     "bilinear" — regularized phase velocity Im(φ₂*∂φ₂)/(|φ₂|²+eps_a). Smooth, but
       modulus-SUPPRESSED: fields drain ∫ρ by modulus rearrangement without any
@@ -65,10 +65,38 @@ def axion_grad(p2, dx, eps_a, agrad):
       The natural central difference of a COMPACT angle: modulus-BLIND, ∇×∇a is an
       exact integer string delta ⟹ ∫ρ quasi-algebraically locked to N_link (EHN's
       stated protection). THE LOCK.
+    "naive"    — per-site a = arctan2(Im φ₂, Re φ₂), then an ordinary central
+      difference OF THAT ANGLE. The most literal reading of EHN's "naive spatial
+      discretization ... second-order central-difference scheme" applied to a, and
+      the third candidate NLINK_LADDER.md names for when bilinear fails to
+      reproduce their floor.
+
+      It is expected to be WORSE than bilinear, and the reason is the point of
+      running it: arctan2 returns a principal value in (−π, π], so wherever the
+      phase crosses the branch cut two adjacent sites differ by ≈2π and the
+      difference reports ≈2π/2dx — an O(1/dx) spurious gradient on a whole
+      codimension-1 sheet that moves with the field. `wrapped` differs ONLY in
+      taking the angle of the ratio rather than the difference of the angles,
+      which is exactly what removes the cut. Any ∫ρ this yields is contaminated by
+      the sheet, so a bound state under it would be evidence about the artefact,
+      not about the physics. That is a result worth having: it is the arm that
+      says whether EHN's floor is reproducible from the most literal reading of
+      their method.
     """
     if agrad == "wrapped":
         return tuple(jnp.angle(_f(p2, i) * jnp.conj(_b(p2, i))) / (2 * dx)
                      for i in range(3))
+    if agrad == "naive":
+        # jnp.angle IS arctan2(imag, real) -- same principal branch, same cut.
+        a = jnp.angle(p2)
+        return tuple(d_c(a, i, dx) for i in range(3))
+    if agrad != "bilinear":
+        # Was a silent fall-through to bilinear, which is safe with two modes and
+        # a trap with three: `agrad` is recorded in the manifest, so a typo would
+        # file a bilinear run under whatever name was misspelled and there would be
+        # nothing in the artifacts to catch it.
+        raise ValueError(f"unknown agrad {agrad!r}; "
+                         f"expected 'bilinear', 'wrapped' or 'naive'")
     inv = 1.0 / (jnp.abs(p2) ** 2 + eps_a)
     return tuple(jnp.imag(jnp.conj(p2) * d_c(p2, i, dx)) * inv for i in range(3))
 
