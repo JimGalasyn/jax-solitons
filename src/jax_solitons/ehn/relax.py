@@ -730,8 +730,11 @@ if __name__ == "__main__":
     ap.add_argument("--n-ic", type=int, default=400)
     ap.add_argument("--ic", choices=["london", "screened"], default="london")
     ap.add_argument("--cramp", type=int, default=0, help="ramp C 0→C over this many steps")
-    ap.add_argument("--agrad", choices=["bilinear", "wrapped"], default="bilinear",
-                    help="∂a discretization; wrapped = modulus-blind exact-winding lock")
+    ap.add_argument("--agrad", choices=["bilinear", "wrapped", "naive"],
+                    default="bilinear",
+                    help="∂a discretization; wrapped = modulus-blind exact-winding "
+                         "lock, naive = central difference of arctan2 (branch cut "
+                         "included -- the literal reading of EHN's method)")
     ap.add_argument("--c4", type=float, default=0.0,
                     help="Skyrme quartic ℒ₃ coeff (single-knot stabilizer; 0 = off)")
     ap.add_argument("--out", default="out_ehn_relax")
