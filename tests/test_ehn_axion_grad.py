@@ -13,7 +13,8 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-from jax_solitons.ehn.energy import axion_grad                  # noqa: E402
+from jax_solitons.ehn.energy import axion_grad, rho_L3           # noqa: E402
+from jax_solitons.ehn.knot_batch import build_ic                 # noqa: E402
 
 DX = 0.5
 
@@ -101,3 +102,49 @@ def test_unknown_mode_raises_rather_than_defaulting_to_bilinear():
     p2, _ = _ramp_x(n=8)
     with pytest.raises(ValueError, match="unknown agrad"):
         axion_grad(p2, DX, 0.05, "wrappd")
+
+
+# -- does a mode carry winding at all? ----------------------------------------
+def test_circulation_is_the_property_that_separates_the_modes():
+    """The physical content of "a is a compact angle" is that grad(a) has
+    circulation 2*pi*(winding). This is the test that says whether an arm
+    implements the L3 physics at all, rather than how well.
+
+    `naive` scores EXACTLY zero, and not by accident: a = arctan2(Im, Re) is
+    single-valued, so summing its central difference around a closed periodic loop
+    telescopes to 0 identically. The branch-cut sheet is not noise on top of a good
+    gradient -- it is precisely the term that cancels the smooth winding.
+
+    Consequence, measured on the real IC 2026-08-06: rho = B.grad(a) has zero NET
+    under naive while carrying the LARGEST |rho| of the three modes, so the L3
+    coupling contributes nothing and nothing acts on the topology. A naive run
+    therefore preserves its seed's charge perfectly, which reads as a superb lock
+    and is an absence of force. That is why the naive ladder arm is void rather
+    than failed.
+    """
+    # The campaign's own IC, not a synthetic winding: the claim is about what the
+    # ladder actually ran on.
+    N, L, nlink, R, core = 48, 38.4, 3, 9.6, 2.0
+    dx = L / N
+    _, p2 = build_ic(N, L, nlink, R, core, n=400)
+    p2 = jnp.asarray(p2)
+
+    def max_circ(mode):
+        """Closed periodic x-loops at every (y, z): sum(grad_x a)*dx / 2pi."""
+        gx = np.asarray(axion_grad(p2, dx, 0.05, mode)[0])
+        return np.abs(gx.sum(axis=0) * dx / (2 * np.pi)).max()
+
+    assert max_circ("naive") == pytest.approx(0.0, abs=1e-12)   # no winding, at all
+    assert max_circ("wrapped") == pytest.approx(1.0, abs=1e-9)  # exactly one
+    assert max_circ("bilinear") > 1e-3        # leaky but nonzero: it does carry some
+
+    # and the net rho follows: zero under naive DESPITE the largest |rho|, which is
+    # the cancellation made visible.
+    B = tuple(jnp.ones((N, N, N)) for _ in range(3))
+    net = {m: float(np.asarray(rho_L3(p2, B, dx, 0.05, m)).sum()) for m in
+           ("wrapped", "bilinear", "naive")}
+    mag = {m: float(np.abs(np.asarray(rho_L3(p2, B, dx, 0.05, m))).sum()) for m in
+           ("wrapped", "bilinear", "naive")}
+    assert net["naive"] == pytest.approx(0.0, abs=1e-6)
+    assert abs(net["wrapped"]) > 1e3
+    assert mag["naive"] > mag["wrapped"]      # biggest local values, zero net
