@@ -13,7 +13,7 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-from jax_solitons.ehn.energy import axion_grad, rho_L3           # noqa: E402
+from jax_solitons.ehn.energy import axion_grad, curlA, rho_L3          # noqa: E402
 from jax_solitons.ehn.knot_batch import build_ic                 # noqa: E402
 
 DX = 0.5
@@ -105,29 +105,42 @@ def test_unknown_mode_raises_rather_than_defaulting_to_bilinear():
 
 
 # -- does a mode carry winding at all? ----------------------------------------
-def test_circulation_is_the_property_that_separates_the_modes():
+@pytest.fixture(scope="module")
+def campaign_ic():
+    """The campaign's own IC -- the claim is about what the ladder actually ran on,
+    not a synthetic winding. Module-scoped because build_ic is O(n.N^3) in numpy
+    and dominates this file's runtime."""
+    N, L, R, core = 48, 38.4, 9.6, 2.0
+    _, p2 = build_ic(N, L, 3, R, core, n=400)
+    return N, L, L / N, jnp.asarray(p2)
+
+
+def test_circulation_is_the_property_that_separates_the_modes(campaign_ic):
     """The physical content of "a is a compact angle" is that grad(a) has
-    circulation 2*pi*(winding). This is the test that says whether an arm
-    implements the L3 physics at all, rather than how well.
+    circulation 2*pi*(winding). This is the test that says whether an arm can
+    carry the L3 charge at all, rather than how well.
 
     `naive` scores EXACTLY zero, and not by accident: a = arctan2(Im, Re) is
     single-valued, so summing its central difference around a closed periodic loop
     telescopes to 0 identically. The branch-cut sheet is not noise on top of a good
     gradient -- it is precisely the term that cancels the smooth winding.
 
-    Consequence, measured on the real IC 2026-08-06: rho = B.grad(a) has zero NET
-    under naive while carrying the LARGEST |rho| of the three modes, so the L3
-    coupling contributes nothing and nothing acts on the topology. A naive run
-    therefore preserves its seed's charge perfectly, which reads as a superb lock
-    and is an absence of force. That is why the naive ladder arm is void rather
-    than failed.
+    The consequence, stated narrowly: net(rho) = 0 IDENTICALLY under naive, for
+    uniform B and for any divergence-free B, while |rho| is the LARGEST of the
+    three modes. So rho cannot represent a winding-derived charge under naive --
+    and EHN's floor is a statement about integral-rho being locked to N_link, so
+    the arm cannot exhibit the mechanism the campaign exists to test. That is what
+    voids the naive ladder arm.
+
+    What this does NOT establish: that the L3 coupling is inert. The engine forms
+    `eelec = 0.5*C*sum(rho*s)` with a spatially varying A0 (relax.py), and
+    sum(rho) = 0 does not imply sum(rho*s) = 0. Measured on this IC with a smooth
+    A0 and B = curl A, naive's eelec is -152 against wrapped's -45965 -- small, but
+    not zero, and with a RANDOM A0 it is the largest of the three. The size depends
+    entirely on how rho's cancelling spikes correlate with A0. An earlier version
+    of this docstring said "the L3 coupling contributes nothing"; that was wrong.
     """
-    # The campaign's own IC, not a synthetic winding: the claim is about what the
-    # ladder actually ran on.
-    N, L, nlink, R, core = 48, 38.4, 3, 9.6, 2.0
-    dx = L / N
-    _, p2 = build_ic(N, L, nlink, R, core, n=400)
-    p2 = jnp.asarray(p2)
+    N, L, dx, p2 = campaign_ic
 
     def max_circ(mode):
         """Closed periodic x-loops at every (y, z): sum(grad_x a)*dx / 2pi."""
@@ -138,13 +151,31 @@ def test_circulation_is_the_property_that_separates_the_modes():
     assert max_circ("wrapped") == pytest.approx(1.0, abs=1e-9)  # exactly one
     assert max_circ("bilinear") > 1e-3        # leaky but nonzero: it does carry some
 
-    # and the net rho follows: zero under naive DESPITE the largest |rho|, which is
-    # the cancellation made visible.
-    B = tuple(jnp.ones((N, N, N)) for _ in range(3))
-    net = {m: float(np.asarray(rho_L3(p2, B, dx, 0.05, m)).sum()) for m in
-           ("wrapped", "bilinear", "naive")}
-    mag = {m: float(np.abs(np.asarray(rho_L3(p2, B, dx, 0.05, m))).sum()) for m in
-           ("wrapped", "bilinear", "naive")}
-    assert net["naive"] == pytest.approx(0.0, abs=1e-6)
-    assert abs(net["wrapped"]) > 1e3
-    assert mag["naive"] > mag["wrapped"]      # biggest local values, zero net
+
+def test_net_rho_vanishes_under_naive_for_a_divergence_free_B(campaign_ic):
+    """The general statement is about DIVERGENCE-FREE B, not uniform B: for
+    single-valued `a`, integral(B.grad a) = -integral(a div B) = 0. B = curl A is
+    the physically relevant case (it is what the engine's rho_L3 is fed), and a
+    uniform B would only test the weaker corollary.
+
+    `abs_rho`, not `mag` -- the engine's energy dict already uses "mag" for the
+    MAGNETIC energy, and the two readings of that word invite exactly the wrong
+    conclusion from a results table.
+    """
+    N, L, dx, p2 = campaign_ic
+    g = jnp.asarray(np.linspace(-L / 2, L / 2, N, endpoint=False))
+    X, Y, Z = jnp.meshgrid(g, g, g, indexing="ij")
+    B = curlA(jnp.sin(2 * np.pi * Y / L), jnp.cos(2 * np.pi * Z / L),
+              jnp.sin(2 * np.pi * X / L), dx)
+
+    net, abs_rho = {}, {}
+    for m in ("wrapped", "bilinear", "naive"):
+        r = rho_L3(p2, B, dx, 0.05, m)
+        net[m] = float(jnp.sum(r))
+        abs_rho[m] = float(jnp.sum(jnp.abs(r)))
+
+    assert net["naive"] == pytest.approx(0.0, abs=1e-9)   # exactly, not approximately
+    assert abs(net["wrapped"]) > 1e2                      # curl A: ~-413, not ~3495
+    assert abs(net["bilinear"]) > 1e2
+    # the cancellation made visible: biggest local values, zero net
+    assert abs_rho["naive"] > abs_rho["wrapped"]
