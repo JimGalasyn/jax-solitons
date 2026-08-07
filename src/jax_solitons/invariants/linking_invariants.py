@@ -82,6 +82,81 @@ def gauss_linking_number(curve_a: np.ndarray, curve_b: np.ndarray) -> float:
     return float(total / (4.0 * np.pi))
 
 
+def writhe(curve: np.ndarray, *, skip: int = 2) -> float:
+    """Writhe of ONE closed curve: the Gauss double integral with itself.
+
+        Wr = 1/(4 pi) * oint oint (r1 - r2) . (dr1 x dr2) / |r1 - r2|^3
+
+    WRITHE IS NOT A KNOT INVARIANT, and treating it as one is the mistake this
+    docstring exists to prevent. It is a property of the EMBEDDING: deform a
+    trefoil within its knot class and the writhe moves continuously. What is
+    invariant is the self-linking of a FRAMED curve, and Calugareanu-White-Fuller
+    splits that as
+
+        Sl = Wr + Tw
+
+    with Tw the twist of the framing about the curve. Curves carry no framing, so
+    this function returns only Wr; a field's framing (for a Faddeev tube, the
+    internal U(1) winding along it) supplies Tw separately.
+
+    Where that matters: in a helicity ledger over several tubes,
+
+        H = sum_i Sl_i + 2 sum_{i<j} Lk_ij
+
+    the Sl_i are framing-dependent, so absolute H is too. DIFFERENCES between
+    configurations that share a framing are not, because the Sl_i cancel -- which
+    is what makes "do these two configurations sit in the same charge sector?"
+    answerable from curves alone.
+
+    The sign is the handedness of the embedding: this module's
+    `torus_knot_curve(2, 3)` parametrisation gives a LEFT-handed trefoil and so a
+    negative writhe, where the textbook right-handed T(2,3) is quoted positive.
+
+    Parameters
+    ----------
+    curve : np.ndarray
+        Closed curve of shape (n, 3), sampled once around with NO repeated
+        endpoint -- same convention as `gauss_linking_number`.
+    skip : int
+        Drop segment pairs closer than this many samples apart ALONG the curve.
+        The adjacent-segment contribution is the integrable 1/r^3 singularity
+        that a midpoint discretisation cannot represent; excluding a couple of
+        neighbours removes it without touching the rest. The result should be
+        stable in both `skip` and the sample count -- check it, rather than
+        trusting one number:
+
+            [writhe(torus_knot_curve(2, 3, n_points=n), skip=s)
+             for n in (240, 480, 960) for s in (1, 2, 4)]
+
+        varies in the 4th decimal for the default trefoil.
+
+    Returns
+    -------
+    float
+    """
+    p = np.asarray(curve, dtype=float)
+    m = len(p)
+    if m < 2 * skip + 3:
+        raise ValueError(
+            f"curve has {m} samples, too few to writhe with skip={skip}: "
+            f"excluding {2 * skip + 1} neighbours per point leaves nothing to "
+            f"integrate. Sample the curve more densely or lower `skip`.")
+    seg = np.roll(p, -1, axis=0) - p               # segment vectors (closed)
+    mid = p + 0.5 * seg
+    idx = np.arange(m)
+    sep = np.abs(idx[:, None] - idx[None, :])
+    sep = np.minimum(sep, m - sep)                 # distance along the CLOSED curve
+    near = sep <= skip
+    total = 0.0
+    for i in range(m):                             # loop over i, vectorise over j
+        rv = mid[i] - mid
+        cross = np.cross(seg[i], seg)
+        denom = np.linalg.norm(rv, axis=1) ** 3 + 1e-30
+        contrib = np.einsum("jk,jk->j", rv, cross) / denom
+        total += float(np.sum(np.where(near[i], 0.0, contrib)))
+    return total / (4.0 * np.pi)
+
+
 def linking_matrix(curves: list[np.ndarray]) -> np.ndarray:
     """Symmetric matrix of pairwise Gauss linking numbers.
 

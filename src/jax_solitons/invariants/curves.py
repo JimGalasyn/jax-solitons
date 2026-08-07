@@ -92,3 +92,71 @@ def hopf_link_curves(*, R: float = DEFAULT_R_MAJOR, r: float = DEFAULT_R_MINOR,
     B = np.stack([R * np.cos(t) + R, np.zeros_like(t), R * np.sin(t)], axis=1)
     return A, B
 
+
+def _rot_y(a: float) -> np.ndarray:
+    c, s = np.cos(a), np.sin(a)
+    return np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+
+
+def hopf_clasped_trefoils(*, R: float = DEFAULT_R_MAJOR,
+                          r: float = DEFAULT_R_MINOR,
+                          n_points: int = 480, sep_scale: float = 1.0,
+                          ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Two (2, 3) trefoils joined by a SINGLE Hopf clasp: lk = -1.
+
+    THE PLACEMENT IS NOT OBVIOUS, and the obvious one is wrong. Interlocking
+    the two tori the way ``hopf_link_curves`` interlocks two circles gives
+    ``lk = +/-4``, not +/-1: each (2, 3) trefoil winds its torus longitude
+    twice, so a deep torus-interlock multiplies the linking (1 x 2 x 2 = 4).
+    A single clasp needs a SHALLOW one instead -- rotate the second trefoil 90
+    degrees so its hole axis is perpendicular to the first's, then offset its
+    centre by ``(1.10 R, 0, 1.09 R)`` so that exactly one strand pair clasps.
+    Those two constants were found by sweeping placement and measuring the
+    Gauss integral; they are not derived, and moving them is not free.
+
+    ``sep_scale`` scales that offset and is the natural breathing coordinate
+    for an interaction scan: it varies separation while holding the link class
+    fixed, which isolates energy-versus-separation from any change of topology.
+
+    THE USABLE RANGE IS NARROW, and narrower than the source this was ported
+    from claimed. That source recorded "lk stays -1 over s ~ 0.85-2.3+"; swept
+    and measured here, lk = -1 holds only over::
+
+        R=1.5, r=0.55 (this module's defaults)   s in [0.85, 1.20]
+        R=5.0, r=1.5  (the source's shape)       s in [0.75, 1.15]
+
+    and at s = 1.25 the Gauss integral returns +3.42 -- a non-integer, i.e. the
+    two curves are passing through each other there, not smoothly unclasping.
+    By s = 1.30 the link is gone. A scan that assumed the wide range would run
+    most of its points on an UNLINKED pair while reporting them as linked,
+    which is the exact failure the breathing coordinate exists to prevent.
+
+    The range depends on the (R, r) shape, so measure it for yours rather than
+    trusting either number above::
+
+        from jax_solitons.invariants.linking_invariants import (
+            gauss_linking_number)
+        a, b = hopf_clasped_trefoils(sep_scale=s)
+        gauss_linking_number(a, b)          # assert ~ -1 at every scan point
+
+    Parameters
+    ----------
+    R, r : float
+        Major and minor radii of each trefoil's embedding torus.
+    n_points : int
+        Samples per component.
+    sep_scale : float
+        Multiplier on the centre-to-centre offset. 1.0 is the reference clasp.
+
+    Returns
+    -------
+    (A, B) : tuple of np.ndarray
+        Two ``(n_points, 3)`` trefoil curves, recentred so the pair's combined
+        centroid is at the origin.
+    """
+    A = torus_knot_curve(2, 3, R=R, r=r, n_points=n_points)
+    B = (_rot_y(np.pi / 2) @ A.T).T + sep_scale * np.array([1.10 * R, 0.0, 1.09 * R])
+    centre = np.vstack([A, B]).mean(axis=0)
+    return A - centre, B - centre
+
