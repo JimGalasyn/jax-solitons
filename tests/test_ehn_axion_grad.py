@@ -13,7 +13,8 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-from jax_solitons.ehn.energy import axion_grad, curlA, rho_L3          # noqa: E402
+from jax_solitons.ehn.energy import (axion_grad, curlA,                 # noqa: E402
+                                     E_L3_electric, rho_L3)
 from jax_solitons.ehn.knot_batch import build_ic                 # noqa: E402
 
 DX = 0.5
@@ -134,11 +135,12 @@ def test_circulation_is_the_property_that_separates_the_modes(campaign_ic):
 
     What this does NOT establish: that the L3 coupling is inert. The engine forms
     `eelec = 0.5*C*sum(rho*s)` with a spatially varying A0 (relax.py), and
-    sum(rho) = 0 does not imply sum(rho*s) = 0. Measured on this IC with a smooth
-    A0 and B = curl A, naive's eelec is -152 against wrapped's -45965 -- small, but
-    not zero, and with a RANDOM A0 it is the largest of the three. The size depends
-    entirely on how rho's cancelling spikes correlate with A0. An earlier version
-    of this docstring said "the L3 coupling contributes nothing"; that was wrong.
+    sum(rho) = 0 does not imply sum(rho*s) = 0 -- the weighting can pick out the
+    cancelling spikes instead of cancelling with them. An earlier version of this
+    docstring said "the L3 coupling contributes nothing"; that was wrong, and
+    `test_vanishing_net_rho_does_not_bound_the_L3_energy` below pins the
+    replacement with both A0s defined in-tree rather than quoting numbers from a
+    field the reader cannot reconstruct.
     """
     N, L, dx, p2 = campaign_ic
 
@@ -179,3 +181,43 @@ def test_net_rho_vanishes_under_naive_for_a_divergence_free_B(campaign_ic):
     assert abs(net["bilinear"]) > 1e2
     # the cancellation made visible: biggest local values, zero net
     assert abs_rho["naive"] > abs_rho["wrapped"]
+
+
+def test_vanishing_net_rho_does_not_bound_the_L3_energy(campaign_ic):
+    """net(rho) = 0 says nothing about the energy the engine actually forms.
+
+    `E_L3_electric` is 0.5*C*sum(rho*s) with a spatially varying A0, so
+    sum(rho) = 0 does not imply sum(rho*s) = 0: the weighting can pick out the
+    cancelling spikes instead of cancelling with them. Under naive those spikes sit
+    on the branch-cut sheet, and whether they survive depends entirely on how A0
+    correlates with that sheet -- so the L3 energy is configuration-dependent and
+    NOT bounded by the vanishing net.
+
+    This test exists because the docstring above used to assert the opposite ("the
+    L3 coupling contributes nothing"), and then, once corrected, quoted two numbers
+    from an A0 that lived nowhere in the tree. A measurement a reader cannot
+    reproduce from the repo is the same failure this file is about, one level up.
+    Both A0s are defined here, deterministically, and the two rows bracket the
+    claim: naive is the SMALLEST contributor under one and the LARGEST under the
+    other.
+    """
+    N, L, dx, p2 = campaign_ic
+    g = jnp.asarray(np.linspace(-L / 2, L / 2, N, endpoint=False))
+    X, Y, Z = jnp.meshgrid(g, g, g, indexing="ij")
+    B = curlA(jnp.sin(2 * np.pi * Y / L), jnp.cos(2 * np.pi * Z / L),
+              jnp.sin(2 * np.pi * X / L), dx)
+    C, eps_a = 400.0, 0.05
+
+    smooth = jnp.cos(2 * np.pi * X / L) * jnp.cos(2 * np.pi * Y / L)
+    rough = jnp.asarray(np.random.default_rng(0).standard_normal((N, N, N)))
+
+    def eelec(s, mode):
+        return float(E_L3_electric(p2, B, s, dx, C, eps_a, mode))
+
+    for s, label in ((smooth, "smooth"), (rough, "rough")):
+        assert abs(eelec(s, "naive")) > 1.0, f"{label}: naive L3 energy is not zero"
+
+    # smooth A0 varies slowly across the cut sheet, so the spikes largely cancel
+    assert abs(eelec(smooth, "naive")) < abs(eelec(smooth, "wrapped"))
+    # a rough A0 decorrelates them, and the largest |rho| of the three wins
+    assert abs(eelec(rough, "naive")) > abs(eelec(rough, "wrapped"))
