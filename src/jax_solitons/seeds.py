@@ -403,3 +403,47 @@ def skyrmion_product(grid: BoxGrid, sep: float = 2.0, axis: int = 0,
     phi = _quaternion_product(phiA, phiB)
     phi = phi / np.sqrt((phi**2).sum(axis=0, keepdims=True))   # re-normalise
     return jnp.asarray(phi, dtype=grid.dtype)
+
+
+def kibble_zurek_tangle(grid: BoxGrid, kcut: float = 1.4, seed: int = 0):
+    """Band-limited random-phase complex field: a quenched vortex TANGLE.
+
+    Every other seed in this module places a structure deliberately -- a rational
+    map, a torus knot, a hedgehog. This one places nothing. It is a smooth random
+    field whose phase winds by accident, so its zero set is a sparse tangle of
+    vortex lines with correlation length ~ 1/kcut, and that is the point: it is the
+    only way to ask what a GENERIC quench produces rather than what you seeded.
+
+    That question is the control every placed seed lacks. A campaign that puts a
+    trefoil in and gets a trefoil out has not learned whether trefoils form; this
+    seed is how you find out. It is also the lattice analogue of the Kibble-Zurek
+    mechanism that makes cosmological defects -- a field with no long-range phase
+    coherence, quenched, leaving whatever topology the correlation length allows.
+
+    Construction: white complex noise in Fourier space, damped by a Gaussian
+    envelope exp(-k^2 / 2 kcut^2), transformed back. The envelope is what makes the
+    phase smooth on scales below 1/kcut, so the vortex cores are resolved rather
+    than being one-cell noise. `kcut` in units of 2*pi/L; the default 1.4 gives a
+    handful of lines in a 24-unit box.
+
+    Normalised to mean |psi| = 1, so it lands on the GPE-like vacuum manifold
+    without a further rescale. Deterministic in `seed`: same seed, same tangle,
+    which a stochastic seed has to promise or no result from it is reproducible.
+
+    Ported from the retired `gpe_conucleation.py`. Returns complex128 regardless of
+    `grid.dtype` -- the vortex detectors that consume this difference phases, and a
+    fp32 phase near a core costs the winding.
+    """
+    if kcut <= 0:
+        raise ValueError(f"kcut must be positive, got {kcut}")
+    N = grid.N
+    rng = np.random.default_rng(seed)
+    k2 = np.zeros((N, N, N))
+    kax = np.asarray(2.0 * np.pi * np.fft.fftfreq(N, d=grid.dx))
+    for ax in range(3):
+        k2 = k2 + np.reshape(kax, [-1 if i == ax else 1 for i in range(3)]) ** 2
+    env = np.exp(-k2 / (2.0 * kcut ** 2))
+    amp = (rng.standard_normal((N, N, N)) + 1j * rng.standard_normal((N, N, N))) * env
+    psi = np.fft.ifftn(amp)
+    psi = psi / (np.mean(np.abs(psi)) + 1e-12)
+    return jnp.asarray(psi.astype(np.complex128))
