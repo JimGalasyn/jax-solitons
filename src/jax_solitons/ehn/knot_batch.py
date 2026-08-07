@@ -15,7 +15,7 @@ or collapse? Writes out/manifest.json.
 
   python ehn_knot_batch.py --N 160 --L 12 --lam 1000 --C 400 --nlink 4 --out out
 """
-import argparse, json, time
+import argparse, json, time, warnings
 from pathlib import Path
 import numpy as np
 import jax
@@ -97,6 +97,13 @@ def _solid_angle_phase(curves, apex, X, Y, Z):
             tri = ax * crx + ay * cry + az * crz
             den = (na * nb * nc + (ax * bx + ay * by + az * bz) * nc
                    + (ax * cx + ay * cy + az * cz) * nb + (bx * cx + by * cy + bz * cz) * na)
+            # NOTE `den` cannot be -0.0: its first term na*nb*nc is a product of
+            # norms, so the sum is +0.0 or positive. arctan2(0, +0.0) is already
+            # 0.0, so there is no sign-of-zero ambiguity here to guard against --
+            # measured on the degenerate N=48 geometry, 4 sites hit tri==den==0
+            # and 0 had a negative-zero den. (A `both_zero -> 0` guard was tried
+            # and was bitwise a no-op.) The real discontinuity in this expression
+            # is `den` CROSSING zero with tri small, which no such guard catches.
             Om += 2 * np.arctan2(tri, den)
         th += 0.5 * Om
     return th
@@ -110,7 +117,105 @@ def _dist(curves, X, Y, Z):
     return d
 
 
-def build_ic(N, L, nlink, R, core, n=400):
+class LatticeCoincidenceWarning(UserWarning):
+    """A phi1 seed curve touches a lattice site: degenerate, observed benign."""
+
+
+class LatticeCoincidence(ValueError):
+    """A seed curve passes exactly through a lattice site.
+
+    `prof(d) = tanh(d/core)` is then EXACTLY 0 there, so |phi| = 0 at a grid point:
+    a vortex core pinned to a site, where the phase is undefined and the winding
+    cannot be represented. Runs seeded this way diverge -- measured 2026-08-07, an
+    N=320 leg NaNed by step 1000 while N=192 (no coincidence) ran 36000 steps
+    clean, and a 1-ULP change in L flipped an N=48 run between the two.
+
+    It is not a small perturbation to be tolerated. It is a different, degenerate
+    initial condition, and which one you get is decided by whether R/dx lands on an
+    integer in binary floating point -- i.e. by luck, silently.
+    """
+
+
+#: agrad modes that DIFFERENCE arg(phi2) directly, and so read the axion phase at
+#: every site. For these an exact |phi2| = 0 on a lattice point is fatal. The
+#: default `bilinear` instead computes Im(conj(phi2) d phi2)/(|phi2|^2 + eps_a),
+#: where eps_a regularises the zero and the same IC runs fine -- measured at N=320
+#: (which carries a phi2 coincidence): bilinear ran 36000 steps clean while wrapped
+#: NaNed at step 1000, same geometry, same box.
+PHASE_DIFFERENCING_AGRAD = ("wrapped", "naive")
+
+
+def _assert_off_lattice(dA, dB, *, N, L, R, agrad=None):
+    """Refuse an IC whose phi2 ring touches a lattice site, WHEN agrad reads the
+    phase pointwise; warn otherwise, and warn on phi1 always.
+
+    Checked on the DISTANCE field rather than reconstructed from R/dx, because the
+    condition that matters is the one the profile actually sees, and `_dist` takes
+    the min over the sampled curve -- which is what tanh is evaluated on.
+
+    `prof(d) = tanh(d/core)` is exactly 0 where a seed sample lands on a site, so
+    |phi| = 0 at a grid point: a vortex core pinned to the lattice.
+
+        N     L                    phi2  phi1   outcome (agrad=wrapped)
+        48    38.400000000000006     1     2    diverged by step 75
+        64    51.2                   0     1    clean to 20000 steps
+        96    76.80000000000001      1     2    diverged by step 75
+        128   102.4                  0     1    clean
+        192   153.6 (stage 1)        0     0    clean to 36000 steps
+        320   256.0 (stage 2)        1     1    diverged by step 1000
+
+    EVERY row above is agrad=wrapped, and that qualifier is load-bearing. At N=320
+    the SAME coincidence was harmless to bilinear -- it ran the full 36000 steps
+    and returned finite Q -- so the guard is conditioned on agrad rather than
+    raising for all of them, which would refuse runs that demonstrably work.
+
+    Two honest limits on what the table can support:
+
+      - It cannot separate "phi2 is what matters" from "two or more coincidences
+        is what matters": diverged rows total 3, 3, 2 and clean rows 1, 1, 0, so
+        both rules give the identical partition. Preference for the phi2 rule
+        rests on the bilinear-vs-wrapped comparison above and on the mechanism
+        (only phase-differencing modes read arg(phi2) at a site), not on this
+        table.
+      - phi1-only coincidence is observed benign twice. That is thin, so it warns
+        rather than passing silently.
+    """
+    def _where(d):
+        return [tuple(int(v) for v in i) for i in np.argwhere(d == 0.0)[:3]]
+
+    fatal = agrad is None or agrad in PHASE_DIFFERENCING_AGRAD
+    n2 = int(np.count_nonzero(dB == 0.0))
+    if n2:
+        detail = (f"phi2 (big ring): {n2} lattice site(s) lie EXACTLY on the seed "
+                  f"curve (N={N}, L={L!r}, R={R!r}, dx={L / N!r}); at "
+                  f"{_where(dB)}{' (first 3)' if n2 > 3 else ''}. |phi2| is exactly "
+                  f"0 there, so arg(phi2) is undefined at a grid point. Nudge R "
+                  f"(or L) off the lattice, e.g. R += dx/2. NOTE this is decided "
+                  f"by whether R/dx is an integer in binary floating point: "
+                  f"L=38.4 and L=38.400000000000006 differ here.")
+        if fatal:
+            raise LatticeCoincidence(
+                detail + f" agrad={agrad!r} differences the phase pointwise, so "
+                f"this diverges (agrad=None is treated as fatal: unknown mode, "
+                f"conservative answer).")
+        warnings.warn(
+            detail + f" agrad={agrad!r} regularises it with eps_a and has been "
+            f"measured to survive this, so it is a warning -- but the IC is still "
+            f"degenerate and was arrived at by floating-point luck.",
+            LatticeCoincidenceWarning, stacklevel=3)
+    n1 = int(np.count_nonzero(dA == 0.0))
+    if n1:
+        warnings.warn(
+            f"phi1 (small rings): {n1} lattice site(s) lie exactly on the seed "
+            f"curve (N={N}, L={L!r}, R={R!r}); at {_where(dA)}"
+            f"{' (first 3)' if n1 > 3 else ''}. |phi1| is exactly 0 there. "
+            f"Observed benign twice, and phi1's phase is never differenced the way "
+            f"arg(phi2) is -- but see the docstring: the data cannot rule out that "
+            f"the count of coincidences is what matters rather than which field.",
+            LatticeCoincidenceWarning, stacklevel=3)
+
+
+def build_ic(N, L, nlink, R, core, n=400, agrad=None):
     g = np.linspace(-L / 2, L / 2, N, endpoint=False)
     X, Y, Z = np.meshgrid(g, g, g, indexing="ij")
     apex = np.array([0.0, 0.0, 0.9 * L])
@@ -127,7 +232,9 @@ def build_ic(N, L, nlink, R, core, n=400):
         rhat = np.array([np.cos(thk), np.sin(thk), 0.0])
         smalls.append(ck[None, :] + r * (np.cos(t)[:, None] * rhat[None, :] + np.sin(t)[:, None] * zhat[None, :]))
     prof = lambda d: np.tanh(d / core)
-    pA = prof(_dist(smalls, X, Y, Z)); pB = prof(_dist([big], X, Y, Z))
+    dA, dB = _dist(smalls, X, Y, Z), _dist([big], X, Y, Z)
+    _assert_off_lattice(dA, dB, N=N, L=L, R=R, agrad=agrad)
+    pA = prof(dA); pB = prof(dB)
     norm = np.sqrt(pA**2 + pB**2 + 1e-6)
     phA = _solid_angle_phase(smalls, apex, X, Y, Z)
     phB = _solid_angle_phase([big], apex, X, Y, Z)
