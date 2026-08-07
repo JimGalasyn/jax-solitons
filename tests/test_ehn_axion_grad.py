@@ -13,7 +13,9 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-from jax_solitons.ehn.energy import axion_grad                  # noqa: E402
+from jax_solitons.ehn.energy import (axion_grad, curlA,                 # noqa: E402
+                                     E_L3_electric, rho_L3)
+from jax_solitons.ehn.knot_batch import build_ic                 # noqa: E402
 
 DX = 0.5
 
@@ -101,3 +103,121 @@ def test_unknown_mode_raises_rather_than_defaulting_to_bilinear():
     p2, _ = _ramp_x(n=8)
     with pytest.raises(ValueError, match="unknown agrad"):
         axion_grad(p2, DX, 0.05, "wrappd")
+
+
+# -- does a mode carry winding at all? ----------------------------------------
+@pytest.fixture(scope="module")
+def campaign_ic():
+    """The campaign's own IC -- the claim is about what the ladder actually ran on,
+    not a synthetic winding. Module-scoped because build_ic is O(n.N^3) in numpy
+    and dominates this file's runtime."""
+    N, L, R, core = 48, 38.4, 9.6, 2.0
+    _, p2 = build_ic(N, L, 3, R, core, n=400)
+    return N, L, L / N, jnp.asarray(p2)
+
+
+def test_circulation_is_the_property_that_separates_the_modes(campaign_ic):
+    """The physical content of "a is a compact angle" is that grad(a) has
+    circulation 2*pi*(winding). This is the test that says whether an arm can
+    carry the L3 charge at all, rather than how well.
+
+    `naive` scores EXACTLY zero, and not by accident: a = arctan2(Im, Re) is
+    single-valued, so summing its central difference around a closed periodic loop
+    telescopes to 0 identically. The branch-cut sheet is not noise on top of a good
+    gradient -- it is precisely the term that cancels the smooth winding.
+
+    The consequence, stated narrowly: net(rho) = 0 IDENTICALLY under naive, for
+    uniform B and for any divergence-free B, while |rho| is the LARGEST of the
+    three modes. So rho cannot represent a winding-derived charge under naive --
+    and EHN's floor is a statement about integral-rho being locked to N_link, so
+    the arm cannot exhibit the mechanism the campaign exists to test. That is what
+    voids the naive ladder arm.
+
+    What this does NOT establish: that the L3 coupling is inert. The engine forms
+    `eelec = 0.5*C*sum(rho*s)` with a spatially varying A0 (relax.py), and
+    sum(rho) = 0 does not imply sum(rho*s) = 0 -- the weighting can pick out the
+    cancelling spikes instead of cancelling with them. An earlier version of this
+    docstring said "the L3 coupling contributes nothing"; that was wrong, and
+    `test_vanishing_net_rho_does_not_bound_the_L3_energy` below pins the
+    replacement with both A0s defined in-tree rather than quoting numbers from a
+    field the reader cannot reconstruct.
+    """
+    N, L, dx, p2 = campaign_ic
+
+    def max_circ(mode):
+        """Closed periodic x-loops at every (y, z): sum(grad_x a)*dx / 2pi."""
+        gx = np.asarray(axion_grad(p2, dx, 0.05, mode)[0])
+        return np.abs(gx.sum(axis=0) * dx / (2 * np.pi)).max()
+
+    assert max_circ("naive") == pytest.approx(0.0, abs=1e-12)   # no winding, at all
+    assert max_circ("wrapped") == pytest.approx(1.0, abs=1e-9)  # exactly one
+    assert max_circ("bilinear") > 1e-3        # leaky but nonzero: it does carry some
+
+
+def test_net_rho_vanishes_under_naive_for_a_divergence_free_B(campaign_ic):
+    """The general statement is about DIVERGENCE-FREE B, not uniform B: for
+    single-valued `a`, integral(B.grad a) = -integral(a div B) = 0. B = curl A is
+    the physically relevant case (it is what the engine's rho_L3 is fed), and a
+    uniform B would only test the weaker corollary.
+
+    `abs_rho`, not `mag` -- the engine's energy dict already uses "mag" for the
+    MAGNETIC energy, and the two readings of that word invite exactly the wrong
+    conclusion from a results table.
+    """
+    N, L, dx, p2 = campaign_ic
+    g = jnp.asarray(np.linspace(-L / 2, L / 2, N, endpoint=False))
+    X, Y, Z = jnp.meshgrid(g, g, g, indexing="ij")
+    B = curlA(jnp.sin(2 * np.pi * Y / L), jnp.cos(2 * np.pi * Z / L),
+              jnp.sin(2 * np.pi * X / L), dx)
+
+    net, abs_rho = {}, {}
+    for m in ("wrapped", "bilinear", "naive"):
+        r = rho_L3(p2, B, dx, 0.05, m)
+        net[m] = float(jnp.sum(r))
+        abs_rho[m] = float(jnp.sum(jnp.abs(r)))
+
+    assert net["naive"] == pytest.approx(0.0, abs=1e-9)   # exactly, not approximately
+    assert abs(net["wrapped"]) > 1e2                      # curl A: ~-413, not ~3495
+    assert abs(net["bilinear"]) > 1e2
+    # the cancellation made visible: biggest local values, zero net
+    assert abs_rho["naive"] > abs_rho["wrapped"]
+
+
+def test_vanishing_net_rho_does_not_bound_the_L3_energy(campaign_ic):
+    """net(rho) = 0 says nothing about the energy the engine actually forms.
+
+    `E_L3_electric` is 0.5*C*sum(rho*s) with a spatially varying A0, so
+    sum(rho) = 0 does not imply sum(rho*s) = 0: the weighting can pick out the
+    cancelling spikes instead of cancelling with them. Under naive those spikes sit
+    on the branch-cut sheet, and whether they survive depends entirely on how A0
+    correlates with that sheet -- so the L3 energy is configuration-dependent and
+    NOT bounded by the vanishing net.
+
+    This test exists because the docstring above used to assert the opposite ("the
+    L3 coupling contributes nothing"), and then, once corrected, quoted two numbers
+    from an A0 that lived nowhere in the tree. A measurement a reader cannot
+    reproduce from the repo is the same failure this file is about, one level up.
+    Both A0s are defined here, deterministically, and the two rows bracket the
+    claim: naive is the SMALLEST contributor under one and the LARGEST under the
+    other.
+    """
+    N, L, dx, p2 = campaign_ic
+    g = jnp.asarray(np.linspace(-L / 2, L / 2, N, endpoint=False))
+    X, Y, Z = jnp.meshgrid(g, g, g, indexing="ij")
+    B = curlA(jnp.sin(2 * np.pi * Y / L), jnp.cos(2 * np.pi * Z / L),
+              jnp.sin(2 * np.pi * X / L), dx)
+    C, eps_a = 400.0, 0.05
+
+    smooth = jnp.cos(2 * np.pi * X / L) * jnp.cos(2 * np.pi * Y / L)
+    rough = jnp.asarray(np.random.default_rng(0).standard_normal((N, N, N)))
+
+    def eelec(s, mode):
+        return float(E_L3_electric(p2, B, s, dx, C, eps_a, mode))
+
+    for s, label in ((smooth, "smooth"), (rough, "rough")):
+        assert abs(eelec(s, "naive")) > 1.0, f"{label}: naive L3 energy is not zero"
+
+    # smooth A0 varies slowly across the cut sheet, so the spikes largely cancel
+    assert abs(eelec(smooth, "naive")) < abs(eelec(smooth, "wrapped"))
+    # a rough A0 decorrelates them, and the largest |rho| of the three wins
+    assert abs(eelec(rough, "naive")) > abs(eelec(rough, "wrapped"))
