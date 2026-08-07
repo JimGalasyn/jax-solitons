@@ -242,7 +242,12 @@ def build_ic_gpu(N, L, nlink, R, core, n=160):
         return th
 
     prof = lambda d: jnp.tanh(d / core)
-    pA = prof(dist(smalls)); pB = prof(dist([big]))
+    dA, dB = dist(smalls), dist([big])
+    # THE path the engine actually seeds from -- knot_batch.build_ic is the numpy
+    # original and is not what `run()` calls, so guarding only there would leave
+    # every campaign unprotected. See knot_batch._assert_off_lattice.
+    EK._assert_off_lattice(np.asarray(dA), np.asarray(dB), N=N, L=L, R=R)
+    pA = prof(dA); pB = prof(dB)
     norm = jnp.sqrt(pA ** 2 + pB ** 2 + 1e-6)
     phi1 = (pA / norm) * jnp.exp(1j * solid_angle(smalls))
     phi2 = (pB / norm) * jnp.exp(1j * solid_angle([big]))

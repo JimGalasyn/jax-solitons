@@ -15,7 +15,7 @@ or collapse? Writes out/manifest.json.
 
   python ehn_knot_batch.py --N 160 --L 12 --lam 1000 --C 400 --nlink 4 --out out
 """
-import argparse, json, time
+import argparse, json, time, warnings
 from pathlib import Path
 import numpy as np
 import jax
@@ -97,7 +97,15 @@ def _solid_angle_phase(curves, apex, X, Y, Z):
             tri = ax * crx + ay * cry + az * crz
             den = (na * nb * nc + (ax * bx + ay * by + az * bz) * nc
                    + (ax * cx + ay * cy + az * cz) * nb + (bx * cx + by * cy + bz * cz) * na)
-            Om += 2 * np.arctan2(tri, den)
+            # arctan2(0, ±0.0) is 0 or ±pi depending on the SIGN OF A ZERO, which is
+            # decided by rounding in `den`'s sum -- so a grid point sitting on the
+            # curve got a phase chosen by luck, and a 1-ULP change in L flipped it
+            # by pi. `_assert_off_lattice` already refuses that geometry; this makes
+            # the residual near-degenerate case reproducible rather than leaving a
+            # second source of arbitrariness in the same expression. The solid angle
+            # is genuinely undefined ON the curve, so 0 is a convention, not a value.
+            both_zero = (tri == 0.0) & (den == 0.0)
+            Om += 2 * np.where(both_zero, 0.0, np.arctan2(tri, den))
         th += 0.5 * Om
     return th
 
@@ -108,6 +116,75 @@ def _dist(curves, X, Y, Z):
         for p in c:
             d = np.minimum(d, np.sqrt((X - p[0])**2 + (Y - p[1])**2 + (Z - p[2])**2))
     return d
+
+
+class LatticeCoincidenceWarning(UserWarning):
+    """A phi1 seed curve touches a lattice site: degenerate, observed benign."""
+
+
+class LatticeCoincidence(ValueError):
+    """A seed curve passes exactly through a lattice site.
+
+    `prof(d) = tanh(d/core)` is then EXACTLY 0 there, so |phi| = 0 at a grid point:
+    a vortex core pinned to a site, where the phase is undefined and the winding
+    cannot be represented. Runs seeded this way diverge -- measured 2026-08-07, an
+    N=320 leg NaNed by step 1000 while N=192 (no coincidence) ran 36000 steps
+    clean, and a 1-ULP change in L flipped an N=48 run between the two.
+
+    It is not a small perturbation to be tolerated. It is a different, degenerate
+    initial condition, and which one you get is decided by whether R/dx lands on an
+    integer in binary floating point -- i.e. by luck, silently.
+    """
+
+
+def _assert_off_lattice(dA, dB, *, N, L, R):
+    """Refuse an IC whose phi2 ring touches a lattice site; warn if phi1's does.
+
+    Checked on the DISTANCE field rather than reconstructed from R/dx, because the
+    condition that matters is the one the profile actually sees, and `_dist` takes
+    the min over the sampled curve -- which is what tanh is evaluated on.
+
+    phi2 is FATAL and phi1 is not, measured over six configurations with no
+    exceptions (2026-08-07):
+
+        N     L                    phi2  phi1   outcome
+        48    38.400000000000006     1     2    diverged by step 75
+        64    51.2                   0     1    clean to 20000 steps
+        96    76.80000000000001      1     2    diverged by step 75
+        128   102.4                  0     1    clean
+        192   153.6 (stage 1)        0     0    clean to 36000 steps
+        320   256.0 (stage 2)        1     1    diverged by step 1000
+
+    The asymmetry has a mechanism: `a = arg phi2` is the field `axion_grad`
+    differentiates, so a phi2 zero pinned to a site leaves the axion phase
+    undefined exactly where the L3 coupling evaluates it. phi1's phase is never
+    differentiated that way. Hence raise on one and warn on the other rather than
+    refusing both -- N=64 and N=128 carry a phi1 coincidence and run clean, and
+    over-refusal has its own cost.
+
+    A warning would be the wrong shape for phi2: the run does not degrade, it
+    produces a different physical state and then dies hours later on a rented box.
+    """
+    where = lambda d: [tuple(int(v) for v in i) for i in np.argwhere(d == 0.0)[:3]]
+    n2 = int(np.count_nonzero(dB == 0.0))
+    if n2:
+        raise LatticeCoincidence(
+            f"phi2 (big ring): {n2} lattice site(s) lie EXACTLY on the seed curve "
+            f"(N={N}, L={L!r}, R={R!r}, dx={L / N!r}); first at {where(dB)}. "
+            f"|phi2| is exactly 0 there, so arg(phi2) -- the axion phase -- is "
+            f"undefined at a grid point, and the run diverges. Nudge R (or L) off "
+            f"the lattice, e.g. R += dx/2, so no sample point coincides with a "
+            f"site. NOTE this is decided by whether R/dx is an integer in binary "
+            f"floating point: L=38.4 and L=38.400000000000006 differ here.")
+    n1 = int(np.count_nonzero(dA == 0.0))
+    if n1:
+        warnings.warn(
+            f"phi1 (small rings): {n1} lattice site(s) lie exactly on the seed "
+            f"curve (N={N}, L={L!r}, R={R!r}); first at {where(dA)}. |phi1| is "
+            f"exactly 0 there. Observed benign -- unlike the same condition on "
+            f"phi2, whose phase the axion gradient reads -- but it is still a "
+            f"degenerate IC arrived at by floating-point luck.",
+            LatticeCoincidenceWarning, stacklevel=3)
 
 
 def build_ic(N, L, nlink, R, core, n=400):
@@ -127,7 +204,9 @@ def build_ic(N, L, nlink, R, core, n=400):
         rhat = np.array([np.cos(thk), np.sin(thk), 0.0])
         smalls.append(ck[None, :] + r * (np.cos(t)[:, None] * rhat[None, :] + np.sin(t)[:, None] * zhat[None, :]))
     prof = lambda d: np.tanh(d / core)
-    pA = prof(_dist(smalls, X, Y, Z)); pB = prof(_dist([big], X, Y, Z))
+    dA, dB = _dist(smalls, X, Y, Z), _dist([big], X, Y, Z)
+    _assert_off_lattice(dA, dB, N=N, L=L, R=R)
+    pA = prof(dA); pB = prof(dB)
     norm = np.sqrt(pA**2 + pB**2 + 1e-6)
     phA = _solid_angle_phase(smalls, apex, X, Y, Z)
     phB = _solid_angle_phase([big], apex, X, Y, Z)
