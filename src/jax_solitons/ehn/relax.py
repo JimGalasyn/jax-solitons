@@ -198,7 +198,13 @@ def energy_report(u, s, w, dx, lam, kappa, C, U, eps_a, q1=1.0, q2=0.0):
 def build_ic_gpu(N, L, nlink, R, core, n=160):
     """GPU port of EK.build_ic (same linked-knot geometry) — the numpy original is
     O(n·N³) on CPU (~70 min at N=320); here the grid arrays are JAX so each segment
-    op runs on the GPU (~1 min at 320³). nlink φ₁ rings threaded by one φ₂ ring."""
+    op runs on the GPU (~1 min at 320³). nlink φ₁ rings threaded by one φ₂ ring.
+
+    NOTE the default `n` differs from `EK.build_ic`'s (160 vs 400), and the
+    lattice-coincidence verdict is a function of WHICH sample points exist — so
+    for one (N, L, R) the two builders can disagree about whether a seed touches a
+    site. `run()` passes n_ic=400 to both, so they agree in practice; a caller that
+    does not is on its own."""
     g = np.linspace(-L / 2, L / 2, N, endpoint=False)
     Xn, Yn, Zn = np.meshgrid(g, g, g, indexing="ij")
     X, Y, Z = jnp.asarray(Xn), jnp.asarray(Yn), jnp.asarray(Zn)
@@ -246,7 +252,14 @@ def build_ic_gpu(N, L, nlink, R, core, n=160):
     # THE path the engine actually seeds from -- knot_batch.build_ic is the numpy
     # original and is not what `run()` calls, so guarding only there would leave
     # every campaign unprotected. See knot_batch._assert_off_lattice.
-    EK._assert_off_lattice(np.asarray(dA), np.asarray(dB), N=N, L=L, R=R)
+    #
+    # The zero COUNT stays on device: pulling two N³ float64 fields to host costs
+    # 262 MB each at N=320 (1 GB at N=512) and a blocking sync on every IC build,
+    # including the overwhelmingly common case of no coincidence at all. Only a
+    # hit is worth materialising, and then only to name the sites.
+    if int(jnp.count_nonzero(dA == 0.0)) or int(jnp.count_nonzero(dB == 0.0)):
+        EK._assert_off_lattice(np.asarray(dA), np.asarray(dB),
+                               N=N, L=L, R=R, agrad=AGRAD)
     pA = prof(dA); pB = prof(dB)
     norm = jnp.sqrt(pA ** 2 + pB ** 2 + 1e-6)
     phi1 = (pA / norm) * jnp.exp(1j * solid_angle(smalls))
@@ -275,6 +288,12 @@ def build_ic_torus(N, L, p, q, R, r, core, n=800, twist=0):
     # boundaries where the winding detector is degenerate ⟹ fragmented skeleton
     # + a biased Gauss Lk (read +25% high before this nudge).
     dxg = L / N
+    # These sub-cell offsets also make this builder structurally IMMUNE to the
+    # lattice coincidence `build_ic` has to be guarded against: no sample point can
+    # land exactly on a site, so no _assert_off_lattice call belongs here. It is
+    # the nudge-instead-of-refuse design, and the linked builder cannot copy it --
+    # silently moving R there would change every catalogued IC, where refusing only
+    # ever blocks a new one.
     off = np.array([0.37, 0.29, 0.41]) * dxg
     knot = off + np.stack([(R + r * np.cos(q * t)) * np.cos(p * t),
                            (R + r * np.cos(q * t)) * np.sin(p * t),

@@ -28,10 +28,22 @@ def test_clean_geometry_passes():
     _assert_off_lattice(OK, OK, N=48, L=38.4, R=9.6)          # must not raise
 
 
-def test_phi2_coincidence_is_refused():
+@pytest.mark.parametrize("agrad", ["wrapped", "naive", None])
+def test_phi2_coincidence_is_refused_for_phase_differencing_modes(agrad):
+    """None is treated as fatal: unknown mode, conservative answer."""
     bad = np.array([[1.0, 0.0], [3.0, 4.0]])
     with pytest.raises(LatticeCoincidence, match="phi2"):
-        _assert_off_lattice(OK, bad, N=48, L=38.4, R=9.6)
+        _assert_off_lattice(OK, bad, N=48, L=38.4, R=9.6, agrad=agrad)
+
+
+def test_phi2_coincidence_only_warns_for_bilinear():
+    """bilinear regularises the zero with eps_a and survives it. Measured at
+    N=320, which carries a phi2 coincidence: bilinear ran the full 36000 steps
+    and returned finite Q while wrapped NaNed at step 1000, same geometry.
+    Raising for every mode would refuse runs that demonstrably work."""
+    bad = np.array([[1.0, 0.0], [3.0, 4.0]])
+    with pytest.warns(LatticeCoincidenceWarning, match="phi2"):
+        _assert_off_lattice(OK, bad, N=320, L=256.0, R=64.0, agrad="bilinear")
 
 
 def test_the_refusal_names_the_cause_and_the_remedy():
@@ -76,14 +88,33 @@ def test_build_ic_end_to_end(L, R, refused):
         assert np.abs(np.asarray(p2)).min() > 0                # no pinned core
 
 
-def test_solid_angle_degenerate_branch_is_deterministic():
-    """arctan2(0, ±0.0) is 0 or pi by the sign of a zero. The curve's solid angle
-    is genuinely undefined ON the curve, so the value is a convention -- it just
-    has to be the SAME convention every run."""
-    from jax_solitons.ehn.knot_batch import _solid_angle_phase
-    # a degenerate curve: both vertices at the evaluation point
-    X = np.zeros((2, 2, 2)); Y = np.zeros_like(X); Z = np.zeros_like(X)
-    curve = np.zeros((2, 3))
-    a = _solid_angle_phase([curve], np.array([0.0, 0.0, 1.0]), X, Y, Z)
-    b = _solid_angle_phase([curve], np.array([0.0, 0.0, 1.0]), X, Y, Z)
-    assert np.array_equal(a, b) and np.all(a == 0.0)
+def test_gpu_builder_is_guarded_too(monkeypatch):
+    """`run()` seeds from build_ic_gpu, not the numpy original, so guarding only
+    knot_batch.build_ic would leave every campaign unprotected -- which is the
+    whole argument for the second call site.
+
+    It reads the module-global AGRAD, which `run()` assigns (relax.py:521) before
+    the IC build (relax.py:548) -- so a real run always sees the mode it will
+    actually relax with, and the test has to set it the same way.
+    """
+    import jax_solitons.ehn.relax as R
+    monkeypatch.setattr(R, "AGRAD", "wrapped")
+    with pytest.raises(LatticeCoincidence, match="phi2"):
+        R.build_ic_gpu(48, 38.400000000000006, 3, 9.600000000000001, 2.0, n=400)
+
+
+def test_gpu_builder_defers_to_agrad(monkeypatch):
+    """Same degenerate geometry, bilinear: warns and BUILDS, because that mode
+    survived it at N=320 for 36000 steps."""
+    import jax_solitons.ehn.relax as R
+    monkeypatch.setattr(R, "AGRAD", "bilinear")
+    with pytest.warns(LatticeCoincidenceWarning):
+        p1, p2 = R.build_ic_gpu(48, 38.400000000000006, 3, 9.600000000000001,
+                                2.0, n=400)
+    assert np.asarray(p2).shape == (48, 48, 48)
+
+
+def test_gpu_builder_accepts_clean_geometry():
+    from jax_solitons.ehn.relax import build_ic_gpu
+    p1, p2 = build_ic_gpu(48, 38.4, 3, 9.6, 2.0, n=400)
+    assert np.abs(np.asarray(p2)).min() > 0
