@@ -358,6 +358,27 @@ def superflow_seed(grid: BoxGrid, curves, *, core: float = 1.0,
     the failure looks exactly like physics (the link "opened") and is not. Keep
     the clasp's strand-strand clearance well above dx.
 
+    Relatedly, do not expect one curve to give exactly one skeleton component.
+    Small fragments (6-20 segments against a few hundred real ones) come and go
+    with resolution; read `vortex_topology.linking_number`'s component list and
+    raise its `min_seg` to suit, rather than testing for a count.
+
+    ON LATTICE COINCIDENCE, and on what is NOT established about it. When a
+    curve sample lands exactly on a grid site, `tanh(d/core)` is exactly 0 there
+    -- the same construction `ehn.knot_batch._assert_off_lattice` refuses,
+    because for EHN's phase-differencing `agrad` modes an exact |phi| = 0 on a
+    site leaves `arg phi` undefined where the L3 coupling reads it. Whether it
+    hurts HERE is a different question and was measured, not assumed: swept on
+    and off lattice at several resolutions, the component count flips both ways
+    and no consistent signal separates them, because fragmentation from other
+    causes dominates. The phase-WINDING detector these seeds feed uses wrapped
+    differences and has no obvious sensitivity to it. So: no guard here.
+
+    But curves built for THIS seeder and then handed to the EHN engine will be
+    refused by that engine, which raises `LatticeCoincidence` rather than
+    diverging silently. Nudge R (or L) off the lattice, e.g. R += dx/2, before
+    crossing over.
+
     Parameters
     ----------
     grid : BoxGrid

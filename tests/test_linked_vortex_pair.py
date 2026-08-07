@@ -22,7 +22,7 @@ from jax_solitons.invariants.curves import (                       # noqa: E402
     hopf_clasped_trefoils, torus_knot_curve,
 )
 from jax_solitons.invariants.linking_invariants import (           # noqa: E402
-    gauss_linking_number,
+    gauss_linking_number, linking_matrix, writhe,
 )
 from jax_solitons.seeds import superflow_seed                      # noqa: E402
 from jax_solitons.vortex_topology import (                         # noqa: E402
@@ -79,6 +79,47 @@ def test_the_clasp_opens_through_a_non_integer_reading():
     a, b = hopf_clasped_trefoils(sep_scale=1.25)
     lk = gauss_linking_number(a, b)
     assert abs(lk - round(lk)) > 0.1        # not near ANY integer
+
+
+def test_clasped_and_separated_pairs_sit_in_different_charge_sectors():
+    """THE result the collision question turns on, and it is arithmetic.
+
+    Helicity of a set of unit-circulation tubes is
+    H = sum_i Sl_i + 2 sum_{i<j} Lk_ij, and for a Faddeev-Skyrme field that H is
+    the Hopf charge. The self-terms are framing-dependent, so absolute H is --
+    but the two configurations here are the SAME two curves rigidly moved, so
+    every Sl_i cancels in the difference and what is left is exact:
+
+        dH = 2 * (lk_clasped - lk_separated) = 2 * (-1 - 0) = -2
+
+    Measured: writhe is -3.2778 for all four curves (separated A, separated B,
+    clasped A, clasped B), so sum(Sl) = -6.5555 in both, and H goes -6.5555 ->
+    -8.5557.
+
+    Consequence, where Q_H is a genuine homotopy invariant: the two
+    configurations are two units apart and NO continuous evolution connects
+    them. A collision of two free trefoils cannot produce the clasped pair at
+    fixed charge, whatever the boost or impact parameter -- they would have to
+    be born linked. In GPE, by contrast, helicity is not conserved at all
+    (reconnections change it, as this file's relaxation test shows), so GPE
+    cannot be used to test the claim either way.
+    """
+    a = torus_knot_curve(2, 3, R=2.2, r=0.8, n_points=480)
+    sep = [a - np.array([6.0, 0, 0]), a + np.array([6.0, 0, 0])]
+    cl = list(hopf_clasped_trefoils(R=2.2, r=0.8, n_points=480))
+
+    lone = writhe(a)
+    for c in sep + cl:                       # rigid motions only: Sl must cancel
+        assert writhe(c) == pytest.approx(lone, rel=1e-9)
+
+    lk_sep = linking_matrix(sep)[0, 1]
+    lk_cl = linking_matrix(cl)[0, 1]
+    assert lk_sep == pytest.approx(0.0, abs=2e-3)
+    assert lk_cl == pytest.approx(-1.0, abs=2e-3)
+
+    h_sep = 2 * lone + 2 * lk_sep
+    h_cl = 2 * lone + 2 * lk_cl
+    assert h_cl - h_sep == pytest.approx(-2.0, abs=1e-2)
 
 
 # -- seed and read back --------------------------------------------------------

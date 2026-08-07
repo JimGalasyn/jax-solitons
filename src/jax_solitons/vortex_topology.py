@@ -198,7 +198,29 @@ def total_helicity(psi, dx, L, r_min_cells=2.0, cap=2500):
     units of the circulation^2). The full Gauss double sum over all skeleton
     segments; near pairs (|r-r'| < r_min) excluded to kill the adjacent-self 1/r^3
     divergence. A CHIRALITY meter: ~0 = achiral tangle, net sign = net handedness
-    -> the quantity any chiral bias in the dynamics has to drive."""
+    -> the quantity any chiral bias in the dynamics has to drive.
+
+    NO 1/2 ON THE DOUBLE SUM, and there used to be one. The helicity of a set of
+    unit-circulation tubes is
+
+        H = sum_i Wr_i + 2 sum_{i<j} Lk_ij
+
+    and the ORDERED double sum over all segment pairs produces exactly that:
+    the (i,j) and (j,i) halves are what supply the factor 2 on the cross terms,
+    while the within-curve pairs give each Wr_i once. Halving it -- "correcting"
+    an ordered-pair double count that the formula actually wants -- returned H/2.
+
+    Caught by comparing against an independent measurement rather than by
+    reading: on a single seeded trefoil, where H must equal the core curve's
+    writhe and there is no linking term to hide in, this returned -1.72 against
+    `linking_invariants.writhe` = -3.28, a ratio of 0.52. It now returns -3.28
+    to within the few percent the near-pair exclusion costs.
+
+    That exclusion, plus the staircase geometry of plaquette-based segments,
+    means the value is REGULARISED rather than exact -- measured about 5% HIGH in
+    magnitude on the single trefoil above (-3.44 against the curve's -3.28). So
+    prefer differences between configurations measured the same way over
+    absolute numbers."""
     P, T, C = vortex_skeleton(psi)
     if len(P) < 2:
         return 0.0
@@ -213,7 +235,7 @@ def total_helicity(psi, dx, L, r_min_cells=2.0, cap=2500):
     d3 = d2 ** 1.5 + 1e-12
     num = np.sum(np.cross(tan[:, None, :], tan[None, :, :]) * R, axis=-1)
     num = np.where(near, 0.0, num)
-    return float(dx ** 2 / (4.0 * np.pi) * 0.5 * np.sum(num / d3))   # 0.5: ordered-pair double count
+    return float(dx ** 2 / (4.0 * np.pi) * np.sum(num / d3))
 
 
 def core_separation(psi, dx, L, min_seg=6):
