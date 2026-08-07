@@ -303,6 +303,93 @@ def flux_threaded_knot_seed(grid: BoxGrid, p: int, q: int, m: int = 1,
 # beyond its radius.
 
 
+def _solid_angle_phase(curves, apex, X, Y, Z):
+    """Half the solid angle each closed curve subtends at every grid point.
+
+    The minimal-superflow (Biot-Savart) phase: the solid angle of the cone from
+    a field point to the curve jumps by 4*pi across the Seifert sheet spanned to
+    `apex`, so half of it winds by 2*pi around the curve -- exactly one quantum
+    of circulation, with no net flow anywhere else. `apex` places the sheet's
+    far end; put it outside the box so the branch cut does not cross the region
+    of interest.
+
+    Van Oosterom-Strackee per triangle (apex, c[i], c[i+1]), summed. O(n * N^3).
+    """
+    th = np.zeros(X.shape)
+    ax, ay, az = apex[0] - X, apex[1] - Y, apex[2] - Z
+    na = np.sqrt(ax * ax + ay * ay + az * az)
+    for c in curves:
+        om = np.zeros(X.shape)
+        m = len(c)
+        for i in range(m):
+            B, C = c[i], c[(i + 1) % m]
+            bx, by, bz = B[0] - X, B[1] - Y, B[2] - Z
+            cx, cy, cz = C[0] - X, C[1] - Y, C[2] - Z
+            nb = np.sqrt(bx * bx + by * by + bz * bz)
+            nc = np.sqrt(cx * cx + cy * cy + cz * cz)
+            crx, cry, crz = by * cz - bz * cy, bz * cx - bx * cz, bx * cy - by * cx
+            tri = ax * crx + ay * cry + az * crz
+            den = (na * nb * nc + (ax * bx + ay * by + az * bz) * nc
+                   + (ax * cx + ay * cy + az * cz) * nb
+                   + (bx * cx + by * cy + bz * cz) * na)
+            om += 2.0 * np.arctan2(tri, den)
+        th += 0.5 * om
+    return th
+
+
+def superflow_seed(grid: BoxGrid, curves, *, core: float = 1.0,
+                   apex_scale: float = 0.9):
+    """Condensate field psi carrying one quantum of circulation on each curve.
+
+    The GPE counterpart of the rational-map seeds above, and the entry point for
+    any linked-vortex experiment: hand it the output of
+    `invariants.curves.hopf_clasped_trefoils` and the seeded field has that
+    link. Amplitude is `tanh(d / core)` on the distance to the nearest curve
+    sample (vanishing on the cores, healing to the bulk over `core`); phase is
+    `_solid_angle_phase`.
+
+    The seed's link is the CURVES' link, so verify it on the curves with
+    `gauss_linking_number` -- cheap, exact, and independent of resolution --
+    rather than on the seeded field. Read it back off the field with
+    `vortex_topology.linking_number` only to confirm the grid resolves it.
+
+    RESOLUTION IS THE WHOLE GAME HERE. Two strands closer than a couple of dx
+    merge into one skeleton component, and a merged pair reads as unlinked --
+    the failure looks exactly like physics (the link "opened") and is not. Keep
+    the clasp's strand-strand clearance well above dx.
+
+    Parameters
+    ----------
+    grid : BoxGrid
+    curves : sequence of (n_i, 3) arrays
+        Closed curves, sampled densely enough that consecutive samples are
+        closer than dx (the distance field is a nearest-SAMPLE distance).
+    core : float
+        Healing length of the amplitude profile, in physical units.
+    apex_scale : float
+        Seifert-sheet apex at (0, 0, apex_scale * L) -- outside the periodic
+        box by default, so the branch cut misses the region of interest.
+
+    Returns
+    -------
+    jnp.ndarray, complex, shape (N, N, N)
+    """
+    Xj, Yj, Zj = grid.coords()
+    X, Y, Z = np.asarray(Xj), np.asarray(Yj), np.asarray(Zj)
+    pts = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1)
+    d = np.full(pts.shape[0], np.inf)
+    for c in curves:
+        d = np.minimum(d, cKDTree(np.asarray(c)).query(pts, k=1)[0])
+    amp = np.tanh(d.reshape(X.shape) / core)
+    apex = np.array([0.0, 0.0, apex_scale * grid.L])
+    theta = _solid_angle_phase([np.asarray(c) for c in curves], apex, X, Y, Z)
+    # Follow the grid's own precision policy (fp32 scouting, fp64 to certify)
+    # rather than demanding complex128 -- asking for it without x64 enabled
+    # silently truncates and warns.
+    cdtype = jnp.complex128 if jnp.dtype(grid.dtype).itemsize == 8 else jnp.complex64
+    return jnp.asarray(amp * np.exp(1j * theta), dtype=cdtype)
+
+
 def _hedgehog_profile(r, r0):
     """Skyrme radial profile f(r): pi at r=0 -> 0 for r >= r0, C^2
     (smootherstep). f(0)=pi gives U(0) = -1, the standard hedgehog winding."""

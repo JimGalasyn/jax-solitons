@@ -10,5 +10,5 @@ from jax_solitons.invariants.colored_jones import *      # noqa: F401,F403
 from jax_solitons.invariants.linking_invariants import * # noqa: F401,F403
 from jax_solitons.invariants.torus_knots import *        # noqa: F401,F403
 from jax_solitons.invariants.curves import (             # noqa: F401
-    torus_knot_curve, hopf_link_curves, torus_xyz,
+    torus_knot_curve, hopf_link_curves, hopf_clasped_trefoils, torus_xyz,
 )
