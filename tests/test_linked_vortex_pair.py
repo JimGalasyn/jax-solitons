@@ -178,13 +178,33 @@ def test_core_separation_is_nan_when_there_is_only_one_line(seeded_single):
 
 
 # -- the energy meters ---------------------------------------------------------
-def test_a_seeded_vortex_pair_is_mostly_incompressible(seeded_pair):
-    """A freshly seeded field is vortex flow with very little sound; that is what
-    makes the later rise of the compressible part readable as radiation rather
-    than as seeding noise."""
+def test_seeded_pair_is_not_periodic_and_that_shows_in_the_split(seeded_pair):
+    """This test previously asserted e_comp < 0.1 * e_inc and passed. It passed
+    because `kinetic_decomposition` used `np.gradient`, whose one-sided edge
+    stencil never looks at the periodic seam. With the spectral gradient the
+    contract demands (Copilot, #99), the same field gives comp/inc = 0.61.
+
+    Neither number is the physical answer. `superflow_seed` does not produce a
+    periodic field: the wrap-around jump is ~45% of the largest interior step on
+    two of three axes, so the spectral derivative rings on it and the old stencil
+    simply hid it. The compressible bin here is dominated by that seam, not by
+    sound.
+
+    So this pins the DEFECT rather than a threshold: the seed is not periodic, and
+    until it is, `kinetic_decomposition` on a freshly seeded field measures the
+    seam. Anything reading the compressible bin as radiation must use DIFFERENCES
+    between frames of the same run, where the static seam cancels.
+    """
+    import numpy as _np
+    psi = _np.asarray(seeded_pair)
+    seam = max(float(_np.abs(_np.take(psi, 0, axis=a)
+                             - _np.take(psi, -1, axis=a)).max()) for a in range(3))
+    interior = max(float(_np.abs(_np.diff(psi, axis=a)).max()) for a in range(3))
+    assert seam > 0.1 * interior, (
+        f"seed looks periodic now (seam {seam:.2e} vs step {interior:.2e}) -- "
+        "if superflow_seed was fixed, restore the e_comp < 0.1*e_inc assertion")
     e_inc, e_comp = kinetic_decomposition(seeded_pair, GRID.dx)
     assert e_inc > 0 and e_comp > 0
-    assert e_comp < 0.1 * e_inc
 
 
 def test_kinetic_decomposition_sends_irrotational_flow_to_the_compressible_bin():
@@ -244,3 +264,35 @@ def test_imaginary_time_relaxation_unlinks_the_pair(seeded_pair):
     e_inc1, _ = kinetic_decomposition(psi, dx)
     assert abs(lk1) < 0.1, f"expected the link to be shed, got lk={lk1}"
     assert e_inc1 < 0.5 * e_inc0        # vortex energy went somewhere
+
+
+# -- periodicity fixes from Copilot's review on #99 ----------------------------
+def test_core_separation_uses_the_periodic_box():
+    """It takes L and documents periodic behaviour; it used to ignore L entirely.
+    Two lines placed just either side of the boundary are CLOSE, not L apart."""
+    import numpy as np
+    from jax_solitons.vortex_topology import _periodic_centroid
+    L = 10.0
+    # points straddling the +-L/2 seam: true centroid is the seam, not the origin
+    pts = np.array([[4.9, 0.0, 0.0], [-4.9, 0.0, 0.0]])
+    c = _periodic_centroid(pts, L)
+    assert abs(abs(c[0]) - 5.0) < 1e-6, f"circular mean landed at {c[0]:.3f}"
+    assert abs(np.mean(pts[:, 0])) < 1e-9      # the arithmetic mean says 0.0 -- wrong
+
+
+def test_kinetic_decomposition_gradient_is_periodic():
+    """np.gradient is one-sided at the edges; this function then projects
+    spectrally. A field that is smooth ACROSS the seam must not manufacture
+    compressible energy there."""
+    import numpy as np
+    from jax_solitons.vortex_topology import kinetic_decomposition
+    n, L = 32, 2 * np.pi
+    dx = L / n
+    x = np.arange(n) * dx
+    X, Y, Z = np.meshgrid(x, x, x, indexing="ij")
+    # a pure phase ramp with an integer number of periods: perfectly periodic,
+    # uniform |psi|, so the flow is uniform and ENTIRELY incompressible
+    psi = np.exp(1j * X).astype(np.complex128)
+    inc, comp = kinetic_decomposition(psi, dx)
+    assert comp / (inc + comp) < 1e-6, (
+        f"periodic field produced {comp/(inc+comp):.2e} compressible fraction")

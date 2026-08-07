@@ -238,13 +238,28 @@ def total_helicity(psi, dx, L, r_min_cells=2.0, cap=2500):
     return float(dx ** 2 / (4.0 * np.pi) * np.sum(num / d3))
 
 
+def _periodic_centroid(pts, L):
+    """Centroid on a periodic axis, via the circular mean.
+
+    An arithmetic mean is wrong for anything that wraps: a line straddling the
+    boundary averages to the middle of the box, which is where it is NOT. Map each
+    coordinate to an angle, average on the circle, map back.
+    """
+    ang = 2.0 * np.pi * pts / L
+    m = np.arctan2(np.sin(ang).mean(axis=0), np.cos(ang).mean(axis=0))
+    return m * L / (2.0 * np.pi)
+
+
 def core_separation(psi, dx, L, min_seg=6):
     """Centroid distance between the two largest vortex lines, in physical units.
 
     The companion observable to `linking_number` for a real-time run: a linked
     pair that stays bound holds a FINITE separation while radiating, where an
-    unbinding one grows without bound (and, in a periodic box, wraps -- so read
-    the trend, not the raw number, once it approaches L/2).
+    unbinding one grows without bound. Periodic-aware: centroids are circular
+    means and the separation is a minimum-image distance, so it saturates at the
+    L*sqrt(3)/2 box diagonal rather than reporting ~L for a pair that merely
+    straddles the boundary. (This previously ignored L entirely and documented the
+    resulting wrap as a caveat -- Copilot caught it on #99.)
 
     Uses the same phase-winding skeleton as `linking_number` rather than a
     density threshold, so sound does not move the centroids.
@@ -260,9 +275,11 @@ def core_separation(psi, dx, L, min_seg=6):
     if len(big) < 2:
         return float("nan")
     pos = (P - np.array(psi.shape) / 2.0) * dx
-    ca = pos[seg_lab == big[0]].mean(axis=0)
-    cb = pos[seg_lab == big[1]].mean(axis=0)
-    return float(np.linalg.norm(ca - cb))
+    ca = _periodic_centroid(pos[seg_lab == big[0]], L)
+    cb = _periodic_centroid(pos[seg_lab == big[1]], L)
+    d = ca - cb
+    d -= L * np.round(d / L)                      # minimum image
+    return float(np.linalg.norm(d))
 
 
 def kinetic_decomposition(psi, dx):
@@ -292,11 +309,18 @@ def kinetic_decomposition(psi, dx):
     """
     n = psi.shape[0]
     rho = np.abs(psi) ** 2
-    gpsi = np.gradient(psi, dx)
-    u = [np.imag(np.conj(psi) * g) / np.sqrt(rho + 1e-6) for g in gpsi]
-    uk = [np.fft.fftn(ui) for ui in u]
     k1 = 2.0 * np.pi * np.fft.fftfreq(n, d=dx)
     KX, KY, KZ = np.meshgrid(k1, k1, k1, indexing="ij")
+    # SPECTRAL gradient, not np.gradient: this function projects in Fourier space
+    # two lines below, which assumes periodicity, while np.gradient falls back to
+    # one-sided differences at the boundaries and does not. Feeding a non-periodic
+    # gradient into a periodic projection puts an edge artefact straight into the
+    # incompressible/compressible split, for exactly the smooth-across-the-seam
+    # fields this is meant to measure. (Copilot caught it on #99.)
+    psik = np.fft.fftn(psi)
+    gpsi = [np.fft.ifftn(1j * K * psik) for K in (KX, KY, KZ)]
+    u = [np.imag(np.conj(psi) * g) / np.sqrt(rho + 1e-6) for g in gpsi]
+    uk = [np.fft.fftn(ui) for ui in u]
     k2 = KX ** 2 + KY ** 2 + KZ ** 2
     k2[0, 0, 0] = 1.0
     kdu = (KX * uk[0] + KY * uk[1] + KZ * uk[2]) / k2
