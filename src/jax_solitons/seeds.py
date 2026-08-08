@@ -303,6 +303,241 @@ def flux_threaded_knot_seed(grid: BoxGrid, p: int, q: int, m: int = 1,
 # beyond its radius.
 
 
+# --------------------------------------------------------------------------
+# Periodic minimal-superflow seed: closed curves -> a condensate carrying one
+# quantum of circulation on each. Built in the PLAQUETTE basis, because that is
+# the basis `vortex_topology.vortex_skeleton` reads.
+# --------------------------------------------------------------------------
+
+# plaquette family -> (normal axis, spanned axes), matching vortex_topology._PLAQ
+_PLAQ_NORMAL = (2, 0, 1)
+_PLAQ_SPAN = ((0, 1), (1, 2), (2, 0))
+
+
+class DegenerateSeedGeometry(ValueError):
+    """A seed curve is not in general position with respect to the lattice.
+
+    The plaquette deposition counts where a curve PIERCES lattice faces. A curve
+    running exactly along a lattice plane, or through a cell corner, pierces
+    nothing there and the deposited vortex line fails to close -- which the
+    divergence check catches. The resulting field would carry an open vortex
+    line, which is not a physical configuration and is not what was asked for.
+
+    Same condition, and same remedy, as `ehn.knot_batch.LatticeCoincidence`:
+    nudge the geometry off the lattice, e.g. by dx/3 in each direction.
+    """
+
+
+def _pierce_plaquettes(curves, N, L):
+    """Integer winding charge per plaquette, shape (3, N, N, N), in _PLAQ order.
+
+    A plaquette of family f sits at an INTEGER lattice coordinate along its
+    normal and spans one cell in each of the other two directions. Count signed
+    crossings of each such face.
+
+    Half-open convention: a segment travelling up the normal crosses plane K for
+    every integer K in (s0, s1]. That never double-counts a shared endpoint
+    landing exactly on a plane, and a segment PARALLEL to the plane crosses
+    nothing (the 0/0 a naive ceil/floor form produces for a ring lying in a
+    lattice plane).
+    """
+    dx = L / N
+    n = np.zeros((3, N, N, N), dtype=np.int64)
+    for c in curves:
+        g = (np.asarray(c, dtype=float) + L / 2.0) / dx
+        g = np.vstack([g, g[:1]])
+        p0, p1 = g[:-1], g[1:]
+        for f in range(3):
+            m = _PLAQ_NORMAL[f]
+            a, b = _PLAQ_SPAN[f]
+            for s in range(len(p0)):
+                a0, a1 = p0[s, m], p1[s, m]
+                if a0 == a1:
+                    continue
+                sgn = 1 if a1 > a0 else -1
+                lo, hi = (a0, a1) if sgn > 0 else (a1, a0)
+                planes = np.arange(np.floor(lo) + 1.0, np.floor(hi) + 1.0)
+                planes = planes[(planes > lo) & (planes <= hi)]
+                for plane in planes:
+                    t = (plane - a0) / (a1 - a0)
+                    pt = p0[s] + t * (p1[s] - p0[s])
+                    idx = [0, 0, 0]
+                    idx[a] = int(np.floor(pt[a])) % N
+                    idx[b] = int(np.floor(pt[b])) % N
+                    idx[m] = int(round(plane)) % N
+                    n[f, idx[0], idx[1], idx[2]] += sgn
+    return n
+
+
+def _plaquette_divergence(n):
+    """Net flux out of each cube. Identically zero iff every vortex line closes."""
+    d = np.zeros_like(n[0])
+    for f in range(3):
+        d += np.roll(n[f], -1, axis=_PLAQ_NORMAL[f]) - n[f]
+    return d
+
+
+def _edge_potential(n, N, L):
+    """Edge field A with discrete `curl A = 2*pi*n`, Coulomb gauge, spectral.
+
+    Forward-difference symbol d_i = exp(i k_i dx) - 1; the solution is
+    A = -2*pi*(conj(d) x n)/|d|^2. The overall sign was fixed by MEASURING the
+    resulting curl (it came back as -2*pi*n, an error of exactly 4*pi on every
+    charged plaquette) rather than by re-deriving the lattice algebra. The
+    identity now holds to ~1e-15, which is the property the whole construction
+    rests on: an exact integer curl means the branch sheet of the integration
+    below jumps by exactly 2*pi and is invisible in exp(i*theta).
+    """
+    dx = L / N
+    k1 = 2.0 * np.pi * np.fft.fftfreq(N, d=dx)
+    K = np.meshgrid(k1, k1, k1, indexing="ij")
+    d = [np.exp(1j * K[i] * dx) - 1.0 for i in range(3)]
+    dabs = sum(np.abs(di) ** 2 for di in d)
+    dabs[0, 0, 0] = 1.0
+    nv = [None, None, None]
+    for f in range(3):
+        nv[_PLAQ_NORMAL[f]] = np.fft.fftn(n[f].astype(float))
+    dc = [np.conj(di) for di in d]
+    cross = [dc[1] * nv[2] - dc[2] * nv[1],
+             dc[2] * nv[0] - dc[0] * nv[2],
+             dc[0] * nv[1] - dc[1] * nv[0]]
+    Ak = [-2.0 * np.pi * cr / dabs for cr in cross]
+    for c in Ak:
+        c[0, 0, 0] = 0.0
+    A = [np.real(np.fft.ifftn(c)) for c in Ak]
+
+    # THE ZERO MODE IS NOT FREE, and setting it to zero is the wrong choice.
+    # The tree integration below is periodic only if every box-spanning
+    # circulation `sum_i A_i` is an exact multiple of 2*pi, so its branch sheet
+    # closes on itself. Discrete Stokes makes those circulations differ between
+    # transverse sites by exact multiples of 2*pi -- so they share one fractional
+    # part -- but their MEAN is not generally zero (measured integers on a
+    # clasped pair run -1..2). Zeroing the mean therefore hands every site the
+    # same non-integer offset, 0.226 of a turn in that case, and that offset was
+    # the entire residual seam. Subtract the shared fraction instead: a uniform
+    # superflow of 2*pi*f/L, which is the physically meaningful zero mode.
+    for i in range(3):
+        turns = A[i].sum(axis=i) / (2.0 * np.pi)
+        frac = float(np.mean(turns - np.round(turns)))
+        A[i] = A[i] - frac * 2.0 * np.pi / A[i].shape[i]
+    return A
+
+
+def _phase_from_edges(A, N):
+    """Integrate the edge field along a spanning tree: x-line, then y, then z."""
+    th = np.zeros((N, N, N))
+    th[:, 0, 0] = np.concatenate([[0.0], np.cumsum(A[0][:-1, 0, 0])])
+    th[:, :, 0] = th[:, 0, 0][:, None] + np.concatenate(
+        [np.zeros((N, 1)), np.cumsum(A[1][:, :-1, 0], axis=1)], axis=1)
+    return th[:, :, 0][:, :, None] + np.concatenate(
+        [np.zeros((N, N, 1)), np.cumsum(A[2][:, :, :-1], axis=2)], axis=2)
+
+
+def _min_image_distance(curves, N, L):
+    """Distance to the nearest curve sample, honouring periodicity: query against
+    the curve tiled over the 27 neighbouring cells."""
+    dx = L / N
+    ax = np.arange(N) * dx - L / 2.0
+    X, Y, Z = np.meshgrid(ax, ax, ax, indexing="ij")
+    pts = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1)
+    d = np.full(pts.shape[0], np.inf)
+    shifts = np.array([[a, b, c] for a in (-L, 0.0, L)
+                       for b in (-L, 0.0, L) for c in (-L, 0.0, L)])
+    for cu in curves:
+        tiled = (np.asarray(cu)[None, :, :] + shifts[:, None, :]).reshape(-1, 3)
+        d = np.minimum(d, cKDTree(tiled).query(pts, k=1)[0])
+    return d.reshape(N, N, N)
+
+
+def superflow_seed(grid: BoxGrid, curves, *, core: float = 1.0):
+    """Condensate field psi carrying one quantum of circulation on each curve,
+    PERIODIC on the box.
+
+    The GPE counterpart of the rational-map seeds above, and the entry point for
+    any linked-vortex experiment: hand it the output of
+    `invariants.curves.hopf_clasped_trefoils` and the seeded field has that link.
+
+    WHY THIS IS NOT THE OBVIOUS CONSTRUCTION. The obvious one -- amplitude
+    `tanh(d/core)`, phase = half the solid angle subtended at each point -- is
+    what this used to do, and it is not periodic. Measured on a clasped pair, the
+    wrap-around phase mismatch was ~0.75 rad on two of three axes, which is a
+    real discontinuity in psi (not a multiple of 2*pi), and a spectral derivative
+    rings on it: the compressible bin of `vortex_topology.kinetic_decomposition`
+    read 0.61 of the incompressible one, essentially all of it seam rather than
+    sound. The free-space solid angle simply has no reason to agree across
+    opposite faces of a torus.
+
+    So the phase is built from the vorticity instead, in the PLAQUETTE basis --
+    the basis `vortex_topology.vortex_skeleton` actually reads:
+
+      1. count signed curve piercings of every lattice face (exact integers);
+      2. check the deposited lines CLOSE (zero discrete divergence) -- they do
+         not if the geometry is degenerate, hence `DegenerateSeedGeometry`;
+      3. solve `curl A = 2*pi*n` spectrally in Coulomb gauge, fixing the zero
+         mode so every box-spanning circulation is an exact multiple of 2*pi;
+      4. integrate A along a spanning tree. Because the curl is exactly integer,
+         the tree's branch sheet jumps by exactly 2*pi and is invisible in
+         exp(i*theta) -- the same trick the Seifert sheet used, but now on a
+         quantity that is exact rather than convergent.
+
+    An earlier attempt deposited vorticity with a CIC kernel and solved the
+    continuum curl. Its circulation converged to 0.97*2*pi -- a shape error near
+    the core, not a scale factor -- so the sheet jumped by 0.97*2*pi and
+    `vortex_skeleton` read the entire sheet as vortex line (3756 segments against
+    a true ~280). Exactness here is not fastidiousness; it is the difference
+    between a seed and a tangle.
+
+    Measured on a clasped trefoil pair at N=72: seam/interior-step 7.9%, 1.4%,
+    7.6% (from 143%, 13%, 140%); compressible fraction 0.018 (from 0.61); lk
+    reads -0.998; tangle helicity -8.569 against the curves' -8.555.
+
+    RESOLUTION IS STILL THE GAME. Two strands closer than a couple of dx merge
+    into one skeleton component, and a merged pair reads as unlinked -- a failure
+    that looks exactly like physics and is not. Keep strand-strand clearance well
+    above dx, and do not expect one curve to give exactly one component; read
+    `vortex_topology.linking_number`'s component list and raise its `min_seg`.
+
+    Parameters
+    ----------
+    grid : BoxGrid
+    curves : sequence of (n_i, 3) arrays
+        Closed curves, sampled densely enough that consecutive samples are much
+        closer than dx -- the deposition walks segment by segment.
+    core : float
+        Healing length of the `tanh(d/core)` amplitude, in physical units.
+
+    Returns
+    -------
+    jnp.ndarray, complex, shape (N, N, N)
+
+    Raises
+    ------
+    DegenerateSeedGeometry
+        If the deposited vortex lines do not close.
+    """
+    N, L = grid.N, grid.L
+    curves = [np.asarray(c, dtype=float) for c in curves]
+    n = _pierce_plaquettes(curves, N, L)
+    div = _plaquette_divergence(n)
+    if np.any(div):
+        bad = np.argwhere(div != 0)[:3]
+        raise DegenerateSeedGeometry(
+            f"deposited vortex lines do not close: {int(np.count_nonzero(div))} "
+            f"cell(s) have net flux, first at {[tuple(int(v) for v in b) for b in bad]} "
+            f"(N={N}, L={L!r}, dx={L / N!r}). A curve is running along a lattice "
+            f"plane or through a cell corner, so it pierces no face there. Nudge "
+            f"the geometry off the lattice, e.g. by dx/3 in each direction. This "
+            f"is the same condition ehn.knot_batch._assert_off_lattice refuses.")
+    A = _edge_potential(n, N, L)
+    theta = _phase_from_edges(A, N)
+    amp = np.tanh(_min_image_distance(curves, N, L) / core)
+    # Follow the grid's own precision policy (fp32 scouting, fp64 to certify)
+    # rather than demanding complex128 -- asking for it without x64 enabled
+    # silently truncates and warns.
+    cdtype = jnp.complex128 if jnp.dtype(grid.dtype).itemsize == 8 else jnp.complex64
+    return jnp.asarray(amp * np.exp(1j * theta), dtype=cdtype)
+
+
 def _hedgehog_profile(r, r0):
     """Skyrme radial profile f(r): pi at r=0 -> 0 for r >= r0, C^2
     (smootherstep). f(0)=pi gives U(0) = -1, the standard hedgehog winding."""

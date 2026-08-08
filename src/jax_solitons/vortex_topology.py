@@ -12,11 +12,21 @@ but NEVER winds the phase by 2pi, so this is immune to compressible noise.
     tangent) on the true |psi|=0 core lines.
   linking_number(psi, dx, L): label the segments into connected vortex lines and
     return the Gauss linking of the two largest (integer-clean, no calibration).
+  core_separation / kinetic_decomposition: the two observables a real-time run
+    needs alongside lk(t) -- are the cores still apart, and where did the energy
+    go (vortex flow vs radiated sound).
 
-Validated by construction: the lk=-1 deuteron seed reads ~ -1; after relaxation
-unlinks it, ~ 0; a single trefoil is one component.
+Validated by construction: a seeded lk=-1 pair of clasped trefoils
+(`invariants.curves.hopf_clasped_trefoils` through `seeds.superflow_seed`) reads
+~ -1; after imaginary-time relaxation unlinks it, ~ 0; a single trefoil is one
+component. `_selftest()` runs exactly that.
 
-  python3 simulations/gpe_vortex_topology.py        # self-test on the deuteron
+NOTE the pseudovorticity route is deliberately NOT offered. An earlier program
+measured linking as a Gauss integral over w = grad(Re psi) x grad(Im psi),
+auto-normalised against the seed. It works, but it inherits two costs this one
+does not: the density threshold picks up sound, and the result needs
+calibration against a known-lk configuration before it means anything. The
+plaquette winding is integer-clean without either.
 """
 from __future__ import annotations
 import numpy as np
@@ -119,7 +129,7 @@ def _order_line(P, T, max_gap=2.2):
 
 def knot_determinants(psi, dx, L, min_seg=12, min_pts=14):
     """Per-line knot type: order each vortex line and return its knot
-    determinant (1=unknot/lepton, 3=trefoil/baryon, 5=cinquefoil, ...).
+    determinant (1=unknot, 3=trefoil, 5=cinquefoil, ...).
     Returns list of (size, det) sorted by size. Lines too short to be knotted
     (< min_pts ordered points) are unknots by definition (det=1) -- this is the
     fix for the IndexError pyknotid threw on degenerate short tangle lines.
@@ -188,7 +198,7 @@ def total_helicity(psi, dx, L, r_min_cells=2.0, cap=2500):
     units of the circulation^2). The full Gauss double sum over all skeleton
     segments; near pairs (|r-r'| < r_min) excluded to kill the adjacent-self 1/r^3
     divergence. A CHIRALITY meter: ~0 = achiral tangle, net sign = net handedness
-    -> the quantity a chiral bias must drive to source a baryon excess (η_B)."""
+    -> the quantity any chiral bias in the dynamics has to drive."""
     P, T, C = vortex_skeleton(psi)
     if len(P) < 2:
         return 0.0
@@ -206,28 +216,174 @@ def total_helicity(psi, dx, L, r_min_cells=2.0, cap=2500):
     return float(dx ** 2 / (4.0 * np.pi) * 0.5 * np.sum(num / d3))   # 0.5: ordered-pair double count
 
 
-def _selftest():
-    import nwt_gpe_binding as Bnd
-    from nwt_gpe_biot_savart_portraits import Grid
-    link = Bnd.deuteron_link(); iso = Bnd.single_trefoil()
-    N, L = Bnd._box_for(link, iso, target_dx=0.24)
-    grid = Grid(N=N, L=L, tilt=(0.4, 0.3)); apex = np.array([0., 0., 0.9 * L])
-    dx = L / N
-    theta = grid.minimal_phase(link, apex); d = grid.distance_to(link)
-    psi = (Bnd.PROFILE.f_at(d) * np.exp(1j * theta)).astype(np.complex128)
-    print(f"box N={N} dx={dx:.3f}  (seed curve lk={Bnd.linking_matrix(link)[0,1]:+.2f})\n")
-    print(f"  {'state':>22} {'#lines':>7} {'lk':>8}  sizes")
-    n, lk, sz = linking_number(psi, dx, L); print(f"  {'deuteron SEED':>22} {n:>7} {lk:>+8.3f}  {sz}")
-    for k in (5, 35, 70):
-        p = psi.copy()
-        for _ in range(k):
-            p = grid.step(p, 0.1)
-        n, lk, sz = linking_number(p, dx, L)
-        print(f"  {'relaxed '+str(k)+' steps':>22} {n:>7} {lk:>+8.3f}  {sz}")
-    ps = (Bnd.PROFILE.f_at(grid.distance_to(iso)) *
-          np.exp(1j * grid.minimal_phase(iso, apex))).astype(np.complex128)
-    n, lk, sz = linking_number(ps, dx, L); print(f"  {'single trefoil':>22} {n:>7} {lk:>+8.3f}  {sz}")
-    print("\n  PASS if: seed lk ~ -1, relaxed lk -> 0 (unlinks), single = 1 line.")
+def _periodic_centroid(pts, L):
+    """Centroid on a periodic axis, via the circular mean.
+
+    An arithmetic mean is wrong for anything that wraps: a line straddling the
+    boundary averages to the middle of the box, which is where it is NOT. Map each
+    coordinate to an angle, average on the circle, map back.
+    """
+    ang = 2.0 * np.pi * pts / L
+    m = np.arctan2(np.sin(ang).mean(axis=0), np.cos(ang).mean(axis=0))
+    return m * L / (2.0 * np.pi)
+
+
+def core_separation(psi, dx, L, min_seg=6):
+    """Centroid distance between the two largest vortex lines, in physical units.
+
+    The companion observable to `linking_number` for a real-time run: a linked
+    pair that stays bound holds a FINITE separation while radiating, where an
+    unbinding one grows without bound. Periodic-aware: centroids are circular
+    means and the separation is a minimum-image distance, so it saturates at the
+    L*sqrt(3)/2 box diagonal rather than reporting ~L for a pair that merely
+    straddles the boundary. (This previously ignored L entirely and documented the
+    resulting wrap as a caveat -- Copilot caught it on #99.)
+
+    Uses the same phase-winding skeleton as `linking_number` rather than a
+    density threshold, so sound does not move the centroids.
+
+    Returns nan if fewer than two lines survive the `min_seg` cut, which is
+    itself informative: it is what a reconnection event looks like frame to
+    frame (two lines merge into one, then split again).
+    """
+    P, T, C = vortex_skeleton(psi)
+    if not len(P):
+        return float("nan")
+    seg_lab, big, _ = _label_lines(C, psi.shape, min_seg)
+    if len(big) < 2:
+        return float("nan")
+    pos = (P - np.array(psi.shape) / 2.0) * dx
+    ca = _periodic_centroid(pos[seg_lab == big[0]], L)
+    cb = _periodic_centroid(pos[seg_lab == big[1]], L)
+    d = ca - cb
+    d -= L * np.round(d / L)                      # minimum image
+    return float(np.linalg.norm(d))
+
+
+def kinetic_decomposition(psi, dx):
+    """Nore-Abid-Brachet split of the kinetic energy: (incompressible, compressible).
+
+    Decompose the density-weighted velocity u = j / sqrt(rho), with
+    j = Im(conj(psi) grad psi), into its solenoidal and irrotational parts in
+    Fourier space. The incompressible part is the VORTEX flow; the compressible
+    part is SOUND.
+
+    This is the meter that makes "binding" observable in a conservative run.
+    Real-time evolution conserves total energy, so a pair cannot simply fall
+    into a bound state -- it has to shed the difference as radiation. Watching
+    E_compressible rise while E_incompressible falls is that shedding, and the
+    amount shed by the time the separation settles is the binding energy the
+    run actually paid. A relaxation cannot show this at all: gradient flow
+    deletes the energy instead of radiating it.
+
+    Assumes a periodic box and a scalar order parameter with bulk |psi| ~ 1.
+    For a GAUGED field the gauge-invariant current is
+    Im(conj(psi) D psi) with D = grad - i q A, which this does NOT compute --
+    the split is only meaningful here for the ungauged case.
+
+    Returns
+    -------
+    (E_incompressible, E_compressible) : tuple of float
+    """
+    n = psi.shape[0]
+    rho = np.abs(psi) ** 2
+    k1 = 2.0 * np.pi * np.fft.fftfreq(n, d=dx)
+    KX, KY, KZ = np.meshgrid(k1, k1, k1, indexing="ij")
+    # SPECTRAL gradient, not np.gradient: this function projects in Fourier space
+    # two lines below, which assumes periodicity, while np.gradient falls back to
+    # one-sided differences at the boundaries and does not. Feeding a non-periodic
+    # gradient into a periodic projection puts an edge artefact straight into the
+    # incompressible/compressible split, for exactly the smooth-across-the-seam
+    # fields this is meant to measure. (Copilot caught it on #99.)
+    psik = np.fft.fftn(psi)
+    gpsi = [np.fft.ifftn(1j * K * psik) for K in (KX, KY, KZ)]
+    u = [np.imag(np.conj(psi) * g) / np.sqrt(rho + 1e-6) for g in gpsi]
+    uk = [np.fft.fftn(ui) for ui in u]
+    k2 = KX ** 2 + KY ** 2 + KZ ** 2
+    k2[0, 0, 0] = 1.0
+    kdu = (KX * uk[0] + KY * uk[1] + KZ * uk[2]) / k2
+    comp = [KX * kdu, KY * kdu, KZ * kdu]
+    scale = 0.5 * dx ** 3 / n ** 3                 # Parseval on an unnormalised FFT
+    e_comp = scale * sum(float(np.sum(np.abs(c) ** 2)) for c in comp)
+    e_tot = scale * sum(float(np.sum(np.abs(c) ** 2)) for c in uk)
+    return e_tot - e_comp, e_comp
+
+
+def link_binding_energy(e_cluster, e_single, n_constituents):
+    """dE = n * E(one constituent) - E(the linked cluster). Positive = bound.
+
+    THE PROTOCOL IS THE POINT, and it is a subtraction that only works if both
+    numbers come from the SAME BOX at the same resolution: the single-knot
+    self-energy and the finite-box (periodic image + Seifert-sheet) corrections
+    are large compared to any binding, and they cancel only when N, L, and the
+    seed profile are identical between the two runs. Relaxing the cluster at one
+    resolution and the constituent at another measures the discretisation.
+
+    This is NOT a potential well depth. A well depth needs E at separation
+    d -> infinity, and a LINKED pair cannot be taken to infinity without
+    unclasping -- the separation coordinate is bounded by the link
+    (`hopf_clasped_trefoils`' sep_scale opens the clasp past ~1.2). What this
+    returns is the energy of the linked cluster relative to its constituents
+    free and separate, which is a real number and a different one.
+
+    Sign convention: dE > 0 means the cluster sits BELOW its separated
+    constituents, i.e. the linking binds.
+    """
+    return float(n_constituents) * float(e_single) - float(e_cluster)
+
+
+def _selftest(n=96, box=12.0, core=0.7, steps=(0, 10, 40)):  # pragma: no cover
+    """Seed a clasped-trefoil pair, relax it, watch the link go. Self-contained.
+
+    Replaces a version that imported two modules from a retired private repo, so
+    it could not have run from an installed copy of this package.
+
+    Excluded from coverage: this is a hand-run diagnostic reached only through
+    `__main__`, printing a table for a human to read rather than asserting
+    anything. Covering it would mean a multi-minute 96^3 relaxation in CI whose
+    only verdict is a printed "PASS if:" line. The library behaviour it
+    exercises is tested directly in `tests/test_linked_vortex_pair.py`.
+    """
+    import numpy as _np
+
+    from jax_solitons.grid import BoxGrid
+    from jax_solitons.invariants.curves import hopf_clasped_trefoils
+    from jax_solitons.invariants.linking_invariants import gauss_linking_number
+    from jax_solitons.seeds import superflow_seed
+
+    grid = BoxGrid(N=n, L=box)
+    dx = grid.dx
+    # Sub-cell nudge into general position: the plaquette deposition refuses a
+    # curve running along a lattice plane. This geometry happens to be fine
+    # without it, but "happens to be" is what the nudge exists to remove.
+    off = _np.array([0.0413, 0.0237, 0.0119])
+    a, b = hopf_clasped_trefoils(R=2.2, r=0.8, n_points=3000)
+    a, b = a + off, b + off
+    print(f"box N={n} L={box} dx={dx:.3f} core={core}   "
+          f"seed curve lk={gauss_linking_number(a, b):+.3f}")
+    psi = _np.asarray(superflow_seed(grid, [a, b], core=core))
+
+    k1 = 2.0 * _np.pi * _np.fft.fftfreq(n, d=dx)
+    KX, KY, KZ = _np.meshgrid(k1, k1, k1, indexing="ij")
+    k2 = KX ** 2 + KY ** 2 + KZ ** 2
+
+    def imag_step(p, dt):                       # split-step, imaginary time
+        p = p * _np.exp(-0.5 * dt * (_np.abs(p) ** 2 - 1.0))
+        p = _np.fft.ifftn(_np.fft.fftn(p) * _np.exp(-0.5 * k2 * dt))
+        return p * _np.exp(-0.5 * dt * (_np.abs(p) ** 2 - 1.0))
+
+    print(f"  {'state':>18} {'#lines':>7} {'lk':>8} {'sep':>8} {'E_inc':>9} {'E_comp':>9}")
+    done = 0
+    for target in steps:
+        while done < target:
+            psi = imag_step(psi, 0.1)
+            done += 1
+        nl, lk, _ = linking_number(psi, dx, box)
+        e_i, e_c = kinetic_decomposition(psi, dx)
+        print(f"  {'relaxed ' + str(done):>18} {nl:>7} {lk:>+8.3f} "
+              f"{core_separation(psi, dx, box):>8.2f} {e_i:>9.1f} {e_c:>9.1f}")
+    print("\n  PASS if: step 0 reads lk ~ -1 on two lines; relaxation drives it "
+          "toward 0.")
 
 
 if __name__ == "__main__":
