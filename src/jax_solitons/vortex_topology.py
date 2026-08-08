@@ -198,7 +198,42 @@ def total_helicity(psi, dx, L, r_min_cells=2.0, cap=2500):
     units of the circulation^2). The full Gauss double sum over all skeleton
     segments; near pairs (|r-r'| < r_min) excluded to kill the adjacent-self 1/r^3
     divergence. A CHIRALITY meter: ~0 = achiral tangle, net sign = net handedness
-    -> the quantity any chiral bias in the dynamics has to drive."""
+    -> the quantity any chiral bias in the dynamics has to drive.
+
+    NO 1/2 ON THE DOUBLE SUM, and there used to be one. The helicity of a set of
+    unit-circulation tubes is
+
+        H = sum_i Wr_i + 2 sum_{i<j} Lk_ij
+
+    and the ORDERED double sum over all segment pairs produces exactly that:
+    the (i,j) and (j,i) halves are what supply the factor 2 on the cross terms,
+    while the within-curve pairs give each Wr_i once. Halving it -- "correcting"
+    an ordered-pair double count that the formula actually wants -- returned H/2.
+
+    Caught by comparing against an independent measurement rather than by
+    reading: on a single seeded trefoil, where H must equal the core curve's
+    writhe and there is no linking term to hide in, this returned -1.72 against
+    `linking_invariants.writhe` = -3.28, a ratio of 0.52. It now returns -3.28
+    to within the few percent the near-pair exclusion costs.
+
+    That exclusion, plus the staircase geometry of plaquette-based segments,
+    means the value is REGULARISED rather than exact, and the error moves with
+    resolution without being monotone in it: on one seeded trefoil the ratio to
+    the curve's writhe is 0.88 at N=72 and 1.05 at N=96.
+
+    AND THE ERROR DOES NOT CANCEL BETWEEN CONFIGURATIONS, which an earlier
+    version of this docstring claimed it would. Measured on a clasped pair
+    against a separated one at N=108: the clasped reading is within 0.2% of its
+    predicted -8.555, but the separated one under-reads its -6.555 by 12%, so
+    their difference comes out -2.83 where the curves say -2.00. The
+    regularisation depends on how close the tubes are to each other, so two
+    configurations that differ in exactly that respect are the case where
+    differencing helps least.
+
+    Treat it as a CHIRALITY meter, which is what the summary line says: sign, and
+    "is it ~0". For a number, measure the curves with
+    `linking_invariants.writhe` and `gauss_linking_number` instead -- they are
+    exact and cost nothing."""
     P, T, C = vortex_skeleton(psi)
     if len(P) < 2:
         return 0.0
@@ -213,7 +248,7 @@ def total_helicity(psi, dx, L, r_min_cells=2.0, cap=2500):
     d3 = d2 ** 1.5 + 1e-12
     num = np.sum(np.cross(tan[:, None, :], tan[None, :, :]) * R, axis=-1)
     num = np.where(near, 0.0, num)
-    return float(dx ** 2 / (4.0 * np.pi) * 0.5 * np.sum(num / d3))   # 0.5: ordered-pair double count
+    return float(dx ** 2 / (4.0 * np.pi) * np.sum(num / d3))
 
 
 def _periodic_centroid(pts, L):
