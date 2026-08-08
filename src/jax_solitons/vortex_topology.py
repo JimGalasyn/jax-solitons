@@ -332,11 +332,17 @@ def link_binding_energy(e_cluster, e_single, n_constituents):
     return float(n_constituents) * float(e_single) - float(e_cluster)
 
 
-def _selftest(n=96, box=12.0, core=0.7, steps=(0, 10, 40)):
+def _selftest(n=96, box=12.0, core=0.7, steps=(0, 10, 40)):  # pragma: no cover
     """Seed a clasped-trefoil pair, relax it, watch the link go. Self-contained.
 
     Replaces a version that imported two modules from a retired private repo, so
     it could not have run from an installed copy of this package.
+
+    Excluded from coverage: this is a hand-run diagnostic reached only through
+    `__main__`, printing a table for a human to read rather than asserting
+    anything. Covering it would mean a multi-minute 96^3 relaxation in CI whose
+    only verdict is a printed "PASS if:" line. The library behaviour it
+    exercises is tested directly in `tests/test_linked_vortex_pair.py`.
     """
     import numpy as _np
 

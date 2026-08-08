@@ -98,6 +98,21 @@ def test_core_separation_is_nan_when_there_is_only_one_line(seeded_single):
     assert np.isnan(core_separation(seeded_single, GRID.dx, GRID.L, min_seg=40))
 
 
+def test_core_separation_is_nan_on_a_field_with_no_vortices_at_all():
+    """The empty-skeleton branch, which the single-line test does NOT reach.
+
+    `min_seg` filtering and finding no phase winding anywhere are separate exits
+    returning the same value, and only the first was covered. A vortex-free field
+    is what a fully decayed run looks like, and it must read as a gap in the
+    series like any other -- not 0.0, which is the value for two coincident
+    lines and would say the opposite of what happened.
+
+    Deliberately tiny and uniform: no seeding, so this costs nothing.
+    """
+    psi = np.ones((16, 16, 16), dtype=np.complex128)
+    assert np.isnan(core_separation(psi, GRID.dx, GRID.L))
+
+
 # -- the energy meters ---------------------------------------------------------
 def test_the_seed_is_periodic(seeded_pair):
     """The predecessor of this test asserted the OPPOSITE, deliberately: the
