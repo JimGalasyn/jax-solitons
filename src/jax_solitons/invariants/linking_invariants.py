@@ -125,10 +125,11 @@ def writhe(curve: np.ndarray, *, skip: int = 2) -> float:
         term is identically zero: the separation of two neighbouring midpoints
         is (seg_i + seg_j)/2, which lies in the span of the two segment vectors,
         so its triple product with seg_i x seg_j vanishes exactly. Measured on
-        the default trefoil, `skip=0` and no exclusion at all agree to six
-        decimals at n = 240, 480 and 960. What `skip > 0` removes is a small
-        amount of REAL signal from the next-nearest pairs (-3.27926 -> -3.27643
-        from skip 0 to 4 at n = 240), about 1e-3 relative for the default.
+        the default `torus_knot_curve(2, 3)` (R = 1.5, r = 0.55), `skip=0` and
+        no exclusion at all agree to six decimals at n = 240, 480 and 960.
+        What `skip > 0` removes is a small amount of REAL signal from the
+        next-nearest pairs (-3.28399 -> -3.28110 from skip 0 to 4 at n = 240),
+        about 1e-3 relative.
 
         Found by mutation: the `writhe-drop-neighbour-exclusion` contract in
         `tests/mutations.py` deletes the exclusion, and nothing in the suite

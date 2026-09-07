@@ -20,9 +20,10 @@ contracts below pin that the guards written afterwards are load-bearing, and
 extend the same discipline to the curve invariants the guards rely on.
 
 Conventions. Entries in `fires` / `may_fire` are substrings of pytest node ids.
-Every `invisible=True` invariance is paired with a firing mutation at the same
-site in this file, so the file itself proves the site is reached by `TESTS`
-(an unpaired OK on an invariance is unevidenced). Where a test that names the
+Every `invisible=True` invariance is paired with a firing mutation in the same
+function, on the very line the invariance mutates where one exists, so the
+file itself proves the site is reached by `TESTS` (an unpaired OK on an
+invariance is unevidenced). Where a test that names the
 defect does NOT fire under it, that is recorded in `note` rather than silently
 omitted.
 """
@@ -96,6 +97,18 @@ MUTATIONS = [
               "implementation, and the helicity cross-checks see it."),
     ),
     Mutation(
+        "writhe-double-the-accumulation",
+        file=_LI,
+        old="        total += float(np.sum(np.where(near[i], 0.0, contrib)))\n",
+        new="        total += 2.0 * float(np.sum(np.where(near[i], 0.0, contrib)))\n",
+        fires=(WR_CONVERGED, WR_PYKNOTID, ONE_TUBE, NO_CANCEL),
+        note=("The known-positive control for the invariance below, on the "
+              "SAME LINE it mutates: proves the loop body is reached and its "
+              "sum is what the tests read. Same fired set as the sign flip, "
+              "for the same reason: the invariance tests are blind to a "
+              "uniform scale."),
+    ),
+    Mutation(
         "writhe-drop-neighbour-exclusion",
         file=_LI,
         old="        total += float(np.sum(np.where(near[i], 0.0, contrib)))\n",
@@ -103,17 +116,18 @@ MUTATIONS = [
         invisible=True,
         note=("MEASURED INVARIANCE, and a correction to the docstring's account "
               "of `skip`. Declared first as a firing mutation against the "
-              "converged-value test; nothing fired. Measured on the default "
-              "trefoil: with the exclusion deleted the writhe is IDENTICAL to "
-              "`skip=0` at six decimals (n = 240, 480, 960), because for "
-              "adjacent segments the midpoint separation lies in the span of "
-              "the two segment vectors and the triple product vanishes "
-              "exactly. There is no adjacent-segment singularity to exclude "
-              "under the midpoint rule. What `skip > 0` removes is real "
-              "signal (-3.27926 -> -3.27643 from skip 0 to 4 at n = 240), "
-              "inside the 5e-3 band the test allows. Paired with "
-              "writhe-flip-sign at the return just after this loop, which proves "
-              "the body is reached."),
+              "converged-value test; nothing fired. Measured on the test "
+              "fixture's trefoil (R = 2.2, r = 0.8): with the exclusion "
+              "deleted the writhe is IDENTICAL to `skip=0` at six decimals "
+              "(n = 240, 480, 960), because for adjacent segments the midpoint "
+              "separation lies in the span of the two segment vectors and the "
+              "triple product vanishes exactly. There is no adjacent-segment "
+              "singularity to exclude under the midpoint rule. What "
+              "`skip > 0` removes is real signal (-3.27926 -> -3.27643 from "
+              "skip 0 to 4 at n = 240 on that curve; -3.28399 -> -3.28110 on "
+              "the default `torus_knot_curve(2, 3)`), inside the 5e-3 band "
+              "the test allows. Paired with writhe-double-the-accumulation "
+              "on this exact line."),
     ),
 
     # ------------------------------------------------------------------
