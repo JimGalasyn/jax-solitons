@@ -130,12 +130,12 @@ def writhe(curve: np.ndarray, *, skip: int = 2) -> float:
         amount of REAL signal from the next-nearest pairs (-3.27926 -> -3.27643
         from skip 0 to 4 at n = 240), about 1e-3 relative for the default.
 
-        Found by mutation (`tests/mutations.py`, `writhe-drop-neighbour-
-        exclusion`): deleting the exclusion fired nothing in the suite. The
-        default is kept at 2 so that no recorded number moves; `skip=0` is the
-        exact midpoint rule and is what a new ledger should use. The result
-        should be stable in both `skip` and the sample count -- check it,
-        rather than trusting one number:
+        Found by mutation: the `writhe-drop-neighbour-exclusion` contract in
+        `tests/mutations.py` deletes the exclusion, and nothing in the suite
+        fired. The default is kept at 2 so that no recorded number moves;
+        `skip=0` is the exact midpoint rule and is what a new ledger should
+        use. The result should be stable in both `skip` and the sample count
+        -- check it, rather than trusting one number:
 
             [writhe(torus_knot_curve(2, 3, n_points=n), skip=s)
              for n in (240, 480, 960) for s in (0, 1, 2, 4)]
