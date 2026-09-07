@@ -48,6 +48,7 @@ test = [
   "pytest-cov>=4",
   "pytest-xdist>=3",        # parallel test execution (pytest -n auto)
   "pyknotid>=0.5",          # exercises the jax_solitons.knots ID tests in CI
+  "mutgate>=0.1",           # named-mutation contracts: `mutgate run tests/mutations.py`
 ]
 knots = [
   # Core-curve knot identification (jax_solitons.knots.identify_knot). Optional:

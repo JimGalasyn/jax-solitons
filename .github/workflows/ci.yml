@@ -47,3 +47,27 @@ jobs:
           files: ./coverage.xml
           flags: py${{ matrix.python-version }}
           fail_ci_if_error: false
+
+  mutations:
+    # Named-mutation contracts (tests/mutations.py): each deliberate defect
+    # must turn exactly the tests it names red, or nothing at all. Gated on
+    # mutgate's exit code, never on parsed output: 1 = a contract failed
+    # (DECORATION / OVERREACH / VISIBLE / NOT_APPLIED / ERROR), 2 = red
+    # baseline. One interpreter is enough; the contracts are about the tests,
+    # not the platform. ~8 min: each mutation reruns its three target modules.
+    runs-on: ubuntu-latest
+    env:
+      JAX_PLATFORMS: cpu
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+      - name: Install (CPU jax)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+      - name: Mutation contracts
+        run: mutgate run tests/mutations.py -v

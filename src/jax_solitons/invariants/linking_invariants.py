@@ -119,14 +119,27 @@ def writhe(curve: np.ndarray, *, skip: int = 2) -> float:
         endpoint -- same convention as `gauss_linking_number`.
     skip : int
         Drop segment pairs closer than this many samples apart ALONG the curve.
-        The adjacent-segment contribution is the integrable 1/r^3 singularity
-        that a midpoint discretisation cannot represent; excluding a couple of
-        neighbours removes it without touching the rest. The result should be
-        stable in both `skip` and the sample count -- check it, rather than
-        trusting one number:
+
+        THIS EXCLUSION IS NOT REMOVING A SINGULARITY, which an earlier version
+        of this docstring claimed. Under the midpoint rule the adjacent-segment
+        term is identically zero: the separation of two neighbouring midpoints
+        is (seg_i + seg_j)/2, which lies in the span of the two segment vectors,
+        so its triple product with seg_i x seg_j vanishes exactly. Measured on
+        the default `torus_knot_curve(2, 3)` (R = 1.5, r = 0.55), `skip=0` and
+        no exclusion at all agree to six decimals at n = 240, 480 and 960.
+        What `skip > 0` removes is a small amount of REAL signal from the
+        next-nearest pairs (-3.28399 -> -3.28110 from skip 0 to 4 at n = 240),
+        about 1e-3 relative.
+
+        Found by mutation: the `writhe-drop-neighbour-exclusion` contract in
+        `tests/mutations.py` deletes the exclusion, and nothing in the suite
+        fired. The default is kept at 2 so that no recorded number moves;
+        `skip=0` is the exact midpoint rule and is what a new ledger should
+        use. The result should be stable in both `skip` and the sample count
+        -- check it, rather than trusting one number:
 
             [writhe(torus_knot_curve(2, 3, n_points=n), skip=s)
-             for n in (240, 480, 960) for s in (1, 2, 4)]
+             for n in (240, 480, 960) for s in (0, 1, 2, 4)]
 
         varies in the 4th decimal for the default trefoil.
 
